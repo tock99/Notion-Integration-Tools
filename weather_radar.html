@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>RainViewer 雨雲レーダー（現在地＋フォールバック関東～近畿）</title>
+<title>RainViewer Radar (Compact, Bottom HUD)</title>
 <link
   rel="stylesheet"
   href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -14,60 +14,65 @@
     margin: 0;
   }
   .leaflet-control-attribution {
-    font-size: 11px;
+    font-size: 10px;
   }
+  /* ==== 極小・下部重畳 ==== */
   .hud {
     position: fixed;
-    left: 8px;
-    top: 8px;
+    left: 50%;
+    bottom: 8px;
+    transform: translateX(-50%);
     z-index: 1000;
-    background: #000a;
-    color: #fff;
-    padding: 8px 10px;
-    border-radius: 10px;
-    font: 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-      "Hiragino Sans", "Noto Sans JP", sans-serif;
-    backdrop-filter: blur(4px);
-  }
-  .row {
     display: flex;
-    gap: 8px;
     align-items: center;
-    margin-top: 6px;
-    flex-wrap: wrap;
+    gap: 6px;
+    background: #000b;
+    color: #fff;
+    border-radius: 10px;
+    padding: 4px 6px;
+    font: 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Hiragino Sans", "Noto Sans JP", sans-serif;
+    backdrop-filter: blur(3px);
   }
-  input[type="range"] {
-    width: 220px;
-  }
-  button {
+  .hud button {
     cursor: pointer;
     border: 0;
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 2px 6px;
     background: #fff1;
     color: #fff;
+    font-size: 11px;
   }
-  button:hover {
+  .hud button:hover {
     background: #fff2;
   }
-  .note {
-    opacity: 0.9;
-    margin-top: 6px;
-    max-width: 360px;
+  .hud input[type="range"] {
+    width: 160px;
+    height: 12px;
+  }
+  .sep {
+    opacity: 0.5;
   }
 </style>
 
 <div id="map"></div>
 
-<div class="hud">
-  <div><b>雨雲レーダー (RainViewer)</b></div>
-  <div id="time">--</div>
-  <div class="row">
-    <button id="play">▶ 再生</button>
-    <input id="slider" type="range" min="0" max="0" step="1" value="0" />
-    <button id="locate">📍現在地へ</button>
-  </div>
-  <div class="note" id="msg">読み込み中…</div>
+<!-- 下部・極小HUD（アイコン＋時刻のみ） -->
+<div class="hud" aria-label="Radar controls">
+  <button id="play" title="再生/一時停止">▶</button>
+  <span class="sep">|</span>
+  <input
+    id="slider"
+    type="range"
+    min="0"
+    max="0"
+    step="1"
+    value="0"
+    aria-label="フレーム"
+  />
+  <span class="sep">|</span>
+  <button id="locate" title="現在地へ">📍</button>
+  <span id="time" style="opacity: 0.85"></span>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -81,38 +86,38 @@
   let userMarker = null;
   function setUserMarker(ll) {
     if (userMarker) map.removeLayer(userMarker);
-    userMarker = L.marker(ll).addTo(map).bindPopup("現在地").openPopup();
+    userMarker = L.marker(ll).addTo(map);
   }
 
   const slider = document.getElementById("slider");
   const timeLabel = document.getElementById("time");
-  const msg = document.getElementById("msg");
+  const playBtn = document.getElementById("play");
+
   let frames = [],
     currentLayer = null,
     idx = 0,
     playing = false,
     timer = null;
 
+  // RainViewer: 過去+予報フレームを取得
   fetch("https://api.rainviewer.com/public/weather-maps.json")
     .then((r) => r.json())
     .then((data) => {
       frames = (data.radar?.past || []).concat(data.radar?.nowcast || []);
       if (!frames.length) {
-        msg.textContent = "フレームが取得できません。";
+        console.warn("No frames");
         return;
       }
       slider.max = frames.length - 1;
       slider.value = String(frames.length - 1);
       showFrame(+slider.value);
     })
-    .catch(() => {
-      msg.textContent = "RainViewerに接続できません。";
-    });
+    .catch((e) => console.error("RainViewer fetch error", e));
 
   function tileUrl(f) {
+    // 256pxタイル / color=1 / smooth=1
     return `https://tilecache.rainviewer.com/v2/radar/${f.path}/256/{z}/{x}/{y}/2/1_1.png`;
   }
-
   function showFrame(i) {
     if (!frames.length) return;
     if (currentLayer) map.removeLayer(currentLayer);
@@ -124,65 +129,53 @@
     const t = new Date(f.time * 1000).toLocaleString("ja-JP", {
       timeZone: "Asia/Tokyo",
     });
-    timeLabel.textContent = `時刻: ${t}`;
+    timeLabel.textContent = t;
   }
-
   function stepNext() {
     showFrame((idx + 1) % frames.length);
   }
-  function updatePlayButton() {
-    document.getElementById("play").textContent = playing
-      ? "⏸ 一時停止"
-      : "▶ 再生";
+  function updatePlayBtn() {
+    playBtn.textContent = playing ? "⏸" : "▶";
   }
 
-  document.getElementById("play").onclick = () => {
+  playBtn.onclick = () => {
     if (!frames.length) return;
     playing = !playing;
     if (playing) {
-      timer = setInterval(stepNext, 1200);
+      timer = setInterval(stepNext, 1100);
     } else {
       clearInterval(timer);
     }
-    updatePlayButton();
+    updatePlayBtn();
   };
   slider.oninput = () => {
     if (playing) {
       playing = false;
       clearInterval(timer);
-      updatePlayButton();
+      updatePlayBtn();
     }
     showFrame(+slider.value);
   };
 
-  // ===== 現在地取得（起動時に自動実行）
   function goCurrent() {
     if (!navigator.geolocation) {
-      msg.textContent = "位置情報APIが使えません。";
       fallback();
       return;
     }
-    msg.textContent = "現在地を取得中…";
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const ll = [pos.coords.latitude, pos.coords.longitude];
         setUserMarker(ll);
         map.setView(ll, 10);
-        msg.textContent = "現在地を中心に表示しました。";
       },
-      () => {
-        fallback();
-      },
+      () => fallback(),
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
     );
   }
-
   function fallback() {
-    map.setView([35.0, 137.0], 6);
-    msg.textContent =
-      "現在地が取得できなかったため、関東～近畿広域を表示しています。";
+    map.setView([35.0, 137.0], 7);
   }
 
   document.getElementById("locate").onclick = goCurrent;
-  goCurrent();
+  goCurrent(); // デフォルトで現在地試行
 </script>
