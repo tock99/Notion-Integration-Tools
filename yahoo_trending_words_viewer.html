@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>急上昇ランキング (Yahooリアルタイム検索)</title>
+    <meta http-equiv="cache-control" content="no-cache" />
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #0f172a;
+        --sub: #5b6b86;
+        --card: #f3f7ff;
+        --line: #dae6ff;
+        --brand: #1d4ed8;
+        --brand-grad: #3b82f6;
+        --ok: #10b981;
+        --shadow: 0 6px 18px rgba(29, 78, 216, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b1020;
+          --fg: #e7efff;
+          --sub: #9fb3d9;
+          --card: #0f1730;
+          --line: #182448;
+          --brand: #60a5fa;
+          --brand-grad: #3b82f6;
+          --ok: #34d399;
+          --shadow: 0 8px 28px rgba(16, 24, 40, 0.5);
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 12px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 8px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0;
+        font-weight: 700;
+      }
+      .src a {
+        font-size: 14px;
+        color: var(--brand);
+        text-decoration: none;
+      }
+      .src a:hover {
+        text-decoration: underline;
+      }
+      .badge {
+        font-size: 11px;
+        color: #fff;
+        background: linear-gradient(135deg, var(--brand), var(--brand-grad));
+        padding: 3px 8px;
+        border-radius: 999px;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .status {
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 6px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        color: inherit;
+        font: inherit;
+        margin-left: 8px;
+      }
+      .btn:hover {
+        box-shadow: var(--shadow);
+      }
+
+      /* 横1行・最大10件。カード幅を狭め、ギャップも縮小 */
+      .row {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+      }
+      .item {
+        /* 10分割を意識した幅：calc((100% - 9*8px)/10) ≒ (100% - 72px)/10 */
+        flex: 0 0 clamp(110px, calc((100% - 72px) / 10), 200px);
+        background: linear-gradient(
+          180deg,
+          var(--card),
+          rgba(255, 255, 255, 0)
+        );
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 10px 8px;
+        position: relative;
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+      }
+      .item:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow);
+      }
+      .rank {
+        position: absolute;
+        top: 6px;
+        left: 8px;
+        font-weight: 800;
+        font-size: 11px;
+        color: var(--sub);
+      }
+      .title {
+        display: block;
+        margin: 12px 0 4px;
+        font-weight: 800;
+        font-size: 13px;
+        line-height: 1.35;
+        text-decoration: none;
+        color: var(--fg);
+        word-break: keep-all;
+        line-break: strict;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .title:hover {
+        color: var(--brand);
+        text-decoration: underline;
+      }
+
+      .skeleton {
+        animation: shimmer 1.2s infinite linear;
+        background: linear-gradient(
+          90deg,
+          rgba(59, 130, 246, 0.08) 25%,
+          rgba(59, 130, 246, 0.16) 37%,
+          rgba(59, 130, 246, 0.08) 63%
+        );
+        background-size: 400% 100%;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 100% 0;
+        }
+        100% {
+          background-position: -100% 0;
+        }
+      }
+      .skel {
+        height: 80px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--card);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>
+          急上昇ランキング
+          <span class="src"
+            >(
+            <a id="srcLink" href="#" target="_blank" rel="noopener noreferrer"
+              >Yahooリアルタイム検索</a
+            >
+            )</span
+          >
+        </h1>
+        <span class="badge">Live</span>
+        <span class="status" id="status">更新: -</span>
+        <span class="spacer"></span>
+        <button id="reloadBtn" class="btn" aria-label="再読み込み">
+          再読み込み
+        </button>
+      </header>
+
+      <main id="listBox" class="row" aria-live="polite" aria-busy="true">
+        <!-- skeleton 10個（幅確認用） -->
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+      </main>
+    </div>
+
+    <script>
+      // ===== 設定 =====
+      const SRC_URL = "https://search.yahoo.co.jp/realtime"; // Yahoo!リアルタイム検索（トップ）
+      const PROXY = "https://api.allorigins.win/raw?url="; // CORS回避
+      const LIMIT = 10; // ★ 最大10件
+      const AUTO_REFRESH_MIN = 10; // 自動更新（分）
+      const YAHOO_SEARCH_BASE = "https://search.yahoo.co.jp/realtime/search?p=";
+      // =================
+
+      const listBox = document.getElementById("listBox");
+      const statusEl = document.getElementById("status");
+      const reloadBtn = document.getElementById("reloadBtn");
+      const srcLink = document.getElementById("srcLink");
+      let timer = null;
+
+      srcLink.href = SRC_URL; // 見出しのリンクを有効に
+
+      const escapeHTML = (s) =>
+        (s || "").replace(
+          /[<>&]/g,
+          (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m])
+        );
+      const fmtDate = (d) => {
+        try {
+          return new Date(d).toLocaleString();
+        } catch {
+          return d || "";
+        }
+      };
+      const setStatus = (msg) => (statusEl.textContent = "更新: " + msg);
+
+      // 矢印・記号・絵文字の除去
+      const ARROW_OR_DECOR_RE =
+        /[←→↑↓↔↕↖↗↘↙⇧⇩⇨⇦⤴⤵➡⬅⬆⬇▲△▼▽◆◇★☆※•●○◎■□]|[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2B00-\u2BFF]/g;
+
+      function cleanLabel(txt) {
+        if (!txt) return "";
+        let s = txt;
+        s = s
+          .replace(/[（(]\s*画像[^）)]*[）)]/gi, "")
+          .replace(/[（(]\s*動画[^）)]*[）)]/gi, "")
+          .replace(ARROW_OR_DECOR_RE, "")
+          .replace(/\u2026/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        return s;
+      }
+
+      // "1 … ワード" をパース
+      function parseRankLine(txt) {
+        const s = cleanLabel(txt);
+        const m = s.match(/^\s*(\d{1,3})\s*[.)、:]?\s*(.+)$/);
+        if (!m) return null;
+        const rank = parseInt(m[1], 10);
+        let word = m[2].trim();
+        word = word.replace(/[（(][^)）]*?[)）]/g, "").trim();
+        if (
+          !word ||
+          /^@/.test(word) ||
+          /Yahoo|検索|ログイン|ヘルプ|設定/i.test(word)
+        )
+          return null;
+        return { rank, word };
+      }
+
+      // 番号付きランキングを抽出
+      function extractRankedTrends(html) {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const results = [];
+        const lists = Array.from(doc.querySelectorAll("ol, ul"));
+        lists.forEach((lst) => {
+          const items = Array.from(lst.querySelectorAll(":scope > li"));
+          items.forEach((li) => {
+            const a = li.querySelector("a");
+            const text = (a ? a.textContent : li.textContent) || "";
+            const parsed = parseRankLine(text);
+            if (!parsed) return;
+            results.push({ rank: parsed.rank, word: parsed.word });
+          });
+        });
+        results.sort((a, b) => a.rank - b.rank);
+        const seen = new Set();
+        return results.filter((r) => {
+          const key = r.word;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+
+      function yahooLink(word) {
+        const q = encodeURIComponent(word);
+        return `${YAHOO_SEARCH_BASE}${q}&rkf=1&ifr=tp_bz`;
+      }
+
+      function card({ rank, word }) {
+        const url = yahooLink(word);
+        return `
+      <article class="item">
+        <span class="rank">#${rank}</span>
+        <a class="title" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHTML(
+          word
+        )}</a>
+      </article>`;
+      }
+
+      async function loadTrends() {
+        listBox.setAttribute("aria-busy", "true");
+        setStatus("読み込み中…");
+        try {
+          const res = await fetch(PROXY + encodeURIComponent(SRC_URL), {
+            cache: "no-store",
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const html = await res.text();
+          const trends = extractRankedTrends(html);
+          const out = trends.slice(0, LIMIT).map(card).join("");
+          listBox.innerHTML =
+            out ||
+            `<div class="item"><div class="muted">ランキングを取得できませんでした。</div></div>`;
+          setStatus(fmtDate(new Date()));
+        } catch (err) {
+          listBox.innerHTML = `<div class="item"><div class="muted">読み込み失敗 (${escapeHTML(
+            err.message
+          )})</div></div>`;
+          setStatus("エラー発生");
+        } finally {
+          listBox.removeAttribute("aria-busy");
+        }
+      }
+
+      function startAutoRefresh(mins) {
+        if (timer) clearInterval(timer);
+        if (mins && mins > 0) timer = setInterval(loadTrends, mins * 60 * 1000);
+      }
+
+      reloadBtn.addEventListener("click", loadTrends);
+
+      // 初期ロード
+      loadTrends();
+      startAutoRefresh(AUTO_REFRESH_MIN);
+    </script>
+  </body>
+</html>
