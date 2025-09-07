@@ -40,7 +40,7 @@
           "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
       }
       .wrap {
-        max-width: 1100px;
+        width: 100%;
         margin: 0 auto;
         padding: 12px;
       }
@@ -101,7 +101,7 @@
       }
       .item {
         /* 10分割を意識した幅：calc((100% - 9*8px)/10) ≒ (100% - 72px)/10 */
-        flex: 0 0 clamp(110px, calc((100% - 72px) / 10), 200px);
+        flex: 0 0 clamp(50px, calc((100% - 72px) / 10), 150px);
         background: linear-gradient(
           180deg,
           var(--card),
