@@ -8,10 +8,10 @@
       :root {
         --bg1: #0f172a;
         --bg2: #1e293b;
-        --accent: #22d3ee;
-        --accent-2: #a78bfa;
+        --accent: #ffffff;
+        --accent-2: #ffffff;
         --text: #e5e7eb;
-        --sub: #94a3b8;
+        --sub: #e5e7eb;
         --card: #0b1220cc;
         --glow: 0 0 40px rgba(34, 211, 238, 0.35),
           0 0 80px rgba(167, 139, 250, 0.15);
@@ -76,11 +76,13 @@
         text-shadow: 0 0 20px rgba(34, 211, 238, 0.25);
         margin-bottom: 6px;
         margin-top: 1px;
+        transform: translateX(-10px);
       }
       .sec {
-        font-size: clamp(22px, 5vw, 48px);
+        font-size: clamp(42px, 5vw, 48px);
         color: var(--accent);
-        transform: translateY(0.01em);
+        transform: translateY(0em);
+        transform: translateX(15px);
       }
       .colon {
         opacity: 1;
