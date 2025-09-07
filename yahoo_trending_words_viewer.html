@@ -92,16 +92,15 @@
         box-shadow: var(--shadow);
       }
 
-      /* 横1行・最大10件。カード幅を狭め、ギャップも縮小 */
       .row {
         display: flex;
         gap: 8px;
-        overflow-x: auto;
+        overflow-x: hidden;
         padding-bottom: 4px;
+        flex-wrap: nowrap;
       }
       .item {
-        /* 10分割を意識した幅：calc((100% - 9*8px)/10) ≒ (100% - 72px)/10 */
-        flex: 0 0 clamp(50px, calc((100% - 72px) / 10), 150px);
+        flex: 0 0 auto;
         background: linear-gradient(
           180deg,
           var(--card),
@@ -192,37 +191,27 @@
         </button>
       </header>
 
-      <main id="listBox" class="row" aria-live="polite" aria-busy="true">
-        <!-- skeleton 10個（幅確認用） -->
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-        <div class="skel skeleton"></div>
-      </main>
+      <main id="listBox" class="row" aria-live="polite" aria-busy="true"></main>
     </div>
 
     <script>
-      // ===== 設定 =====
-      const SRC_URL = "https://search.yahoo.co.jp/realtime"; // Yahoo!リアルタイム検索（トップ）
-      const PROXY = "https://api.allorigins.win/raw?url="; // CORS回避
-      const LIMIT = 10; // ★ 最大10件
-      const AUTO_REFRESH_MIN = 10; // 自動更新（分）
+      const SRC_URL = "https://search.yahoo.co.jp/realtime";
+      const PROXY = "https://api.allorigins.win/raw?url=";
+      const LIMIT_MAX = 10;
+      const AUTO_REFRESH_MIN = 10;
       const YAHOO_SEARCH_BASE = "https://search.yahoo.co.jp/realtime/search?p=";
-      // =================
+      const GAP_PX = LIMIT_MAX;
+      const MIN_W = 50,
+        MAX_W = 100;
 
       const listBox = document.getElementById("listBox");
       const statusEl = document.getElementById("status");
       const reloadBtn = document.getElementById("reloadBtn");
       const srcLink = document.getElementById("srcLink");
-      let timer = null;
+      srcLink.href = SRC_URL;
 
-      srcLink.href = SRC_URL; // 見出しのリンクを有効に
+      let timer = null;
+      let latestTrends = [];
 
       const escapeHTML = (s) =>
         (s || "").replace(
@@ -238,7 +227,6 @@
       };
       const setStatus = (msg) => (statusEl.textContent = "更新: " + msg);
 
-      // 矢印・記号・絵文字の除去
       const ARROW_OR_DECOR_RE =
         /[←→↑↓↔↕↖↗↘↙⇧⇩⇨⇦⤴⤵➡⬅⬆⬇▲△▼▽◆◇★☆※•●○◎■□]|[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2B00-\u2BFF]/g;
 
@@ -255,7 +243,6 @@
         return s;
       }
 
-      // "1 … ワード" をパース
       function parseRankLine(txt) {
         const s = cleanLabel(txt);
         const m = s.match(/^\s*(\d{1,3})\s*[.)、:]?\s*(.+)$/);
@@ -272,7 +259,6 @@
         return { rank, word };
       }
 
-      // 番号付きランキングを抽出
       function extractRankedTrends(html) {
         const doc = new DOMParser().parseFromString(html, "text/html");
         const results = [];
@@ -302,15 +288,43 @@
         return `${YAHOO_SEARCH_BASE}${q}&rkf=1&ifr=tp_bz`;
       }
 
-      function card({ rank, word }) {
+      function estimateWidth(word) {
+        const len = [...word].length;
+        if (len <= 6) return 100;
+        if (len <= 10) return 120;
+        if (len <= 14) return 135;
+        return 150;
+      }
+
+      function pickToFit(trends) {
+        const W = listBox.clientWidth || window.innerWidth;
+        const picked = [];
+        let used = 0;
+        for (const t of trends) {
+          const w = Math.max(MIN_W, Math.min(MAX_W, estimateWidth(t.word)));
+          const add = (picked.length ? GAP_PX : 0) + w;
+          if (picked.length === 0 || used + add <= W) {
+            picked.push({ ...t, _w: w });
+            used += add;
+            if (picked.length >= LIMIT_MAX) break;
+          } else break;
+        }
+        if (picked.length === 0 && trends.length) {
+          picked.push({ ...trends[0], _w: estimateWidth(trends[0].word) });
+        }
+        return picked;
+      }
+
+      function card({ rank, word, _w }) {
         const url = yahooLink(word);
+        const style = `style="width:${_w}px"`;
         return `
-      <article class="item">
-        <span class="rank">#${rank}</span>
-        <a class="title" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHTML(
+          <article class="item" ${style}>
+            <span class="rank">#${rank}</span>
+            <a class="title" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHTML(
           word
         )}</a>
-      </article>`;
+          </article>`;
       }
 
       async function loadTrends() {
@@ -320,13 +334,11 @@
           const res = await fetch(PROXY + encodeURIComponent(SRC_URL), {
             cache: "no-store",
           });
-          if (!res.ok) throw new Error("HTTP " + res.status);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const html = await res.text();
           const trends = extractRankedTrends(html);
-          const out = trends.slice(0, LIMIT).map(card).join("");
-          listBox.innerHTML =
-            out ||
-            `<div class="item"><div class="muted">ランキングを取得できませんでした。</div></div>`;
+          latestTrends = trends;
+          renderToFit();
           setStatus(fmtDate(new Date()));
         } catch (err) {
           listBox.innerHTML = `<div class="item"><div class="muted">読み込み失敗 (${escapeHTML(
@@ -338,14 +350,27 @@
         }
       }
 
+      function renderToFit() {
+        if (!latestTrends || latestTrends.length === 0) {
+          listBox.innerHTML = `<div class="item"><div class="muted">ランキングを取得できませんでした。</div></div>`;
+          return;
+        }
+        const picked = pickToFit(latestTrends);
+        listBox.innerHTML = picked.map(card).join("");
+      }
+
       function startAutoRefresh(mins) {
         if (timer) clearInterval(timer);
         if (mins && mins > 0) timer = setInterval(loadTrends, mins * 60 * 1000);
       }
 
+      window.addEventListener("resize", () => {
+        if (latestTrends.length) renderToFit();
+      });
+
       reloadBtn.addEventListener("click", loadTrends);
 
-      // 初期ロード
+      // 初期ロード & 自動リロード
       loadTrends();
       startAutoRefresh(AUTO_REFRESH_MIN);
     </script>
