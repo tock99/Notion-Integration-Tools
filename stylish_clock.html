@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stylish Clock — Multi Timezone</title>
+    <title>Stylish Clock — Multi Timezone (Compact)</title>
     <style>
       :root {
         --bg1: #0f172a;
@@ -41,13 +41,13 @@
       }
       .wrap {
         width: min(100%, 960px);
-        padding: 20px;
+        padding: 6px;
       }
       .card {
         position: relative;
-        border-radius: 20px;
-        padding: 24px;
-        backdrop-filter: blur(10px);
+        border-radius: 14px;
+        padding: 10px;
+        backdrop-filter: blur(6px);
         background: linear-gradient(
           180deg,
           rgba(255, 255, 255, 0.06),
@@ -58,55 +58,52 @@
         text-align: center;
       }
       .date {
-        font-size: 16px;
-        margin-bottom: 6px;
+        font-size: 13px;
+        margin-bottom: 1px;
         color: var(--sub);
       }
       .time {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
           "Liberation Mono", "Noto Sans Mono", monospace;
         font-weight: 700;
-        letter-spacing: 0.04em;
-        font-size: clamp(40px, 14vw, 140px);
-        line-height: 1;
+        letter-spacing: 0.015em;
+        font-size: clamp(36px, 12vw, 120px);
+        line-height: 0.8;
         display: flex;
         align-items: baseline;
-        gap: 0.25em;
-        justify-content: center;
+        gap: 0.05em;
+        justify-content: center; /* コロン周りをさらに近づけ */
         text-shadow: 0 0 20px rgba(34, 211, 238, 0.25);
-        margin-bottom: 8px;
+        margin-bottom: 6px;
+        margin-top: 1px;
       }
       .sec {
-        font-size: clamp(28px, 7vw, 64px);
+        font-size: clamp(22px, 5vw, 48px);
         color: var(--accent);
-        transform: translateY(0.05em);
+        transform: translateY(0.01em);
       }
       .colon {
-        animation: blink 1s steps(1, end) infinite;
-        opacity: 0.9;
+        opacity: 1;
+        transition: opacity 0.1s linear;
       }
-      @keyframes blink {
-        50% {
-          opacity: 0.25;
-        }
-      }
+
       .buttons {
-        margin-top: 8px;
+        margin-top: 6px;
         display: flex;
         justify-content: center;
         flex-wrap: wrap;
-        gap: 6px;
+        gap: 3px;
       }
       .btn {
         appearance: none;
         border: 1px solid rgba(148, 163, 184, 0.35);
         color: var(--text);
         background: rgba(2, 6, 23, 0.4);
-        padding: 5px 10px;
-        border-radius: 8px;
+        padding: 2px 5px;
+        border-radius: 5px;
         cursor: pointer;
-        font-size: 12px;
-        letter-spacing: 0.02em;
+        font-size: 8.5px;
+        letter-spacing: 0.01em;
       }
       .btn.active {
         border-color: var(--accent);
@@ -119,14 +116,15 @@
       <div class="card">
         <div class="date" id="dateText">1970/01/01 (Thu)</div>
         <div class="time" aria-live="polite" aria-atomic="true">
-          <span id="hh">00</span><span class="colon">:</span
+          <span id="hh">00</span><span class="colon" id="colon">:</span
           ><span id="mm">00</span><span class="sec" id="ss">00</span>
         </div>
         <div class="buttons">
-          <button class="btn active" data-zone="Asia/Tokyo">Tokyo</button>
-          <button class="btn" data-zone="America/New_York">New York</button>
-          <button class="btn" data-zone="Europe/London">London</button>
+          <button class="btn active" data-zone="system">System</button>
+          <button class="btn" data-zone="Asia/Tokyo">Tokyo</button>
           <button class="btn" data-zone="Asia/Singapore">Singapore</button>
+          <button class="btn" data-zone="Europe/London">London</button>
+          <button class="btn" data-zone="America/New_York">New York</button>
         </div>
       </div>
     </div>
@@ -138,8 +136,10 @@
         const ss = document.getElementById("ss");
         const dateText = document.getElementById("dateText");
         const buttons = document.querySelectorAll(".btn");
+        const colon = document.getElementById("colon");
 
-        let currentZone = "Asia/Tokyo";
+        let currentZone = "system";
+        let colonVisible = true;
 
         function pad(n) {
           return String(n).padStart(2, "0");
@@ -153,11 +153,14 @@
             day: "2-digit",
             weekday: "short",
           };
-          return new Intl.DateTimeFormat("ja-JP", opt).format(d);
+          const df = new Intl.DateTimeFormat("en-US", opt).formatToParts(d);
+          const map = Object.fromEntries(df.map((o) => [o.type, o.value]));
+          return `${map.year}/${map.month}/${map.day} (${map.weekday})`;
         }
 
         function getNow(tz) {
           const now = new Date();
+          if (tz === "system") return now;
           const str = now.toLocaleString("en-US", { timeZone: tz });
           return new Date(str);
         }
@@ -167,7 +170,14 @@
           hh.textContent = pad(d.getHours());
           mm.textContent = pad(d.getMinutes());
           ss.textContent = pad(d.getSeconds());
-          dateText.textContent = formatDate(d, currentZone);
+          dateText.textContent = formatDate(
+            d,
+            currentZone === "system" ? undefined : currentZone
+          );
+
+          // blink colon on each second update
+          colonVisible = !colonVisible;
+          colon.style.opacity = colonVisible ? 1 : 0;
         }
 
         function start() {
