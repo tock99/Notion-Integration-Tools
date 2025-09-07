@@ -30,6 +30,14 @@
           --shadow: 0 8px 28px rgba(16, 24, 40, 0.5);
         }
       }
+
+      /* ← 横スクロールの微小はみ出しをなくすために全体へ */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       html,
       body {
         margin: 0;
@@ -44,6 +52,7 @@
         margin: 0 auto;
         padding: 12px;
       }
+
       header {
         display: flex;
         align-items: center;
@@ -92,15 +101,22 @@
         box-shadow: var(--shadow);
       }
 
+      /* 横スクロール禁止（溢れないようJS側で件数を調整） */
       .row {
         display: flex;
         gap: 8px;
         overflow-x: hidden;
         padding-bottom: 4px;
         flex-wrap: nowrap;
+        /* 念のためスクロールバーも見た目上消す */
+        scrollbar-width: none; /* Firefox */
       }
+      .row::-webkit-scrollbar {
+        display: none;
+      } /* WebKit */
+
       .item {
-        flex: 0 0 auto;
+        flex: 0 0 auto; /* 幅はJSで指定（50〜100px） */
         background: linear-gradient(
           180deg,
           var(--card),
@@ -191,18 +207,27 @@
         </button>
       </header>
 
-      <main id="listBox" class="row" aria-live="polite" aria-busy="true"></main>
+      <main id="listBox" class="row" aria-live="polite" aria-busy="true">
+        <!-- 初期ロードまでの簡易スケルトン -->
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+        <div class="skel skeleton"></div>
+      </main>
     </div>
 
     <script>
+      // ===== 設定 =====
       const SRC_URL = "https://search.yahoo.co.jp/realtime";
       const PROXY = "https://api.allorigins.win/raw?url=";
-      const LIMIT_MAX = 10;
-      const AUTO_REFRESH_MIN = 10;
+      const LIMIT_MAX = 10; // 最大8件
+      const AUTO_REFRESH_MIN = 10; // 自動リロード（分）
       const YAHOO_SEARCH_BASE = "https://search.yahoo.co.jp/realtime/search?p=";
-      const GAP_PX = LIMIT_MAX;
+      const GAP_PX = 10; // .row の gap と一致
       const MIN_W = 50,
-        MAX_W = 100;
+        MAX_W = 100; // ★カード幅レンジ（ご指定）
+      const SAFE_MARGIN = 6; // 端数/枠線誤差の吸収
+      // =================
 
       const listBox = document.getElementById("listBox");
       const statusEl = document.getElementById("status");
@@ -211,7 +236,7 @@
       srcLink.href = SRC_URL;
 
       let timer = null;
-      let latestTrends = [];
+      let latestTrends = []; // リサイズ時の再レイアウト用
 
       const escapeHTML = (s) =>
         (s || "").replace(
@@ -227,6 +252,7 @@
       };
       const setStatus = (msg) => (statusEl.textContent = "更新: " + msg);
 
+      // 矢印・記号・絵文字の除去（誤検出を避ける）
       const ARROW_OR_DECOR_RE =
         /[←→↑↓↔↕↖↗↘↙⇧⇩⇨⇦⤴⤵➡⬅⬆⬇▲△▼▽◆◇★☆※•●○◎■□]|[\u2190-\u21FF\u25A0-\u25FF\u2600-\u26FF\u2B00-\u2BFF]/g;
 
@@ -243,6 +269,7 @@
         return s;
       }
 
+      // "1 … ワード" をパース
       function parseRankLine(txt) {
         const s = cleanLabel(txt);
         const m = s.match(/^\s*(\d{1,3})\s*[.)、:]?\s*(.+)$/);
@@ -259,6 +286,7 @@
         return { rank, word };
       }
 
+      // ランキング抽出
       function extractRankedTrends(html) {
         const doc = new DOMParser().parseFromString(html, "text/html");
         const results = [];
@@ -283,31 +311,38 @@
         });
       }
 
+      // Yahooリンク生成
       function yahooLink(word) {
         const q = encodeURIComponent(word);
         return `${YAHOO_SEARCH_BASE}${q}&rkf=1&ifr=tp_bz`;
       }
 
+      // 目安幅（文字数ベース）→ MIN_W〜MAX_Wに丸める
       function estimateWidth(word) {
-        const len = [...word].length;
-        if (len <= 6) return 100;
-        if (len <= 10) return 120;
-        if (len <= 14) return 135;
-        return 150;
+        const len = [...word].length; // サロゲート対応
+        let w;
+        if (len <= 6) w = 50;
+        else if (len <= 10) w = 70;
+        else if (len <= 14) w = 85;
+        else w = 100;
+        return Math.max(MIN_W, Math.min(MAX_W, w));
       }
 
+      // 横スクロールしない件数だけ選ぶ（左から貪欲）
       function pickToFit(trends) {
-        const W = listBox.clientWidth || window.innerWidth;
+        const W = Math.max(0, Math.floor(listBox.clientWidth) - SAFE_MARGIN);
         const picked = [];
         let used = 0;
         for (const t of trends) {
-          const w = Math.max(MIN_W, Math.min(MAX_W, estimateWidth(t.word)));
+          const w = estimateWidth(t.word);
           const add = (picked.length ? GAP_PX : 0) + w;
           if (picked.length === 0 || used + add <= W) {
             picked.push({ ...t, _w: w });
             used += add;
             if (picked.length >= LIMIT_MAX) break;
-          } else break;
+          } else {
+            break;
+          }
         }
         if (picked.length === 0 && trends.length) {
           picked.push({ ...trends[0], _w: estimateWidth(trends[0].word) });
@@ -317,9 +352,8 @@
 
       function card({ rank, word, _w }) {
         const url = yahooLink(word);
-        const style = `style="width:${_w}px"`;
         return `
-          <article class="item" ${style}>
+          <article class="item" style="width:${_w}px">
             <span class="rank">#${rank}</span>
             <a class="title" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHTML(
           word
@@ -364,11 +398,14 @@
         if (mins && mins > 0) timer = setInterval(loadTrends, mins * 60 * 1000);
       }
 
+      // リサイズで再レイアウト（再フェッチなし）
       window.addEventListener("resize", () => {
         if (latestTrends.length) renderToFit();
       });
 
-      reloadBtn.addEventListener("click", loadTrends);
+      document
+        .getElementById("reloadBtn")
+        .addEventListener("click", loadTrends);
 
       // 初期ロード & 自動リロード
       loadTrends();
