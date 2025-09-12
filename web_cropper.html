@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Site Crop Embed</title>
+<style>
+  html,body{height:100%;margin:0;background:#fff;font:12px system-ui}
+  .frame-wrap{
+    position:relative; margin:0 auto; overflow:hidden;
+    box-shadow:0 0 0 1px #e5e7eb inset; border-radius:10px;
+    background:#fff;
+  }
+  iframe{
+    position:absolute; top:0; left:0; border:0; width:100vw; height:100vh;
+    transform-origin: top left;
+    /* クリックできるようにする場合は pointer-events:auto に */
+    pointer-events:auto;
+  }
+  .note{position:fixed;left:8px;bottom:8px;padding:4px 8px;border-radius:8px;background:#0008;color:#fff}
+</style>
+
+<div id="wrap" class="frame-wrap" role="region" aria-label="Embedded crop"></div>
+<div id="msg" class="note" hidden></div>
+
+<script>
+(function(){
+  const qs=new URLSearchParams(location.search);
+  const target=qs.get('url'); if(!target){ document.body.innerHTML='<p style="padding:16px">?url= で対象ページを指定してください</p>'; return; }
+  const x=+qs.get('x')||0, y=+qs.get('y')||0;
+  const w=Math.max(100, +qs.get('w')||800), h=Math.max(100, +qs.get('h')||600);
+  const scale=parseFloat(qs.get('scale')||'1');
+
+  const wrap=document.getElementById('wrap');
+  wrap.style.width=w+'px'; wrap.style.height=h+'px';
+
+  const ifr=document.createElement('iframe');
+  ifr.src=target;
+  // 重要：iframeはページ全体を読み込み、負のtranslateで見せたい領域を窓に合わせる
+  // width/height を大きめに確保するため viewport 単位を使い、scale で縮放
+  const applyTransform=()=>{ 
+    ifr.style.transform=`translate(${-x}px, ${-y}px) scale(${scale})`;
+  };
+  applyTransform();
+
+  // 読み込み可否の簡易インジケータ
+  const note=document.getElementById('msg');
+  let timer=setTimeout(()=>{ 
+    note.hidden=false; note.textContent='読み込み中…（サイトが埋め込み禁止の場合は表示できません）'; 
+  }, 800);
+
+  ifr.addEventListener('load', ()=>{
+    clearTimeout(timer);
+    note.hidden=true;
+    // クロスオリジンのため中身のサイズ取得や自動スクロールはできません（仕様）。
+    // 必要なら x,y,w,h を調整してください。
+  });
+
+  ifr.addEventListener('error', ()=>{
+    clearTimeout(timer);
+    note.hidden=false; note.textContent='読み込みエラー（URLが無効か、埋め込み禁止の可能性）';
+  });
+
+  wrap.appendChild(ifr);
+
+  // 画面サイズ変化時も変換を維持
+  window.addEventListener('resize', applyTransform);
+})();
+</script>
