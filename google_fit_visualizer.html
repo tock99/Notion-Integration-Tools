@@ -1,119 +1,121 @@
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Google Fit: Weight Chart</title>
+<title>Google Fit: Weight Chart (kg)</title>
 <style>
   html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; }
-  .wrap { max-width: 900px; margin: 24px auto; padding: 0 12px; }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-  .bar input, .bar button, .bar select { font-size: 14px; padding: 6px 8px; }
-  #msg { font-size: 12px; opacity: .8; }
+  .wrap { max-width: 900px; margin: 20px auto; padding: 0 12px; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .head h2 { margin: 12px 0; font-weight: 600; }
+  .head button { font-size: 14px; padding: 6px 10px; cursor: pointer; }
+  #msg { font-size: 12px; opacity: .7; margin: 6px 0 10px; }
   canvas { width: 100%; height: 420px; }
 </style>
 
 <div class="wrap">
-  <h2>Google Fit – Weight</h2>
-  <div class="bar">
-    <button id="signIn">Sign in & Fetch</button>
-    <label>Days:
-      <input id="days" type="number" min="7" max="3650" value="90" />
-    </label>
-    <label>Unit:
-      <select id="unit">
-        <option value="kg" selected>kg</option>
-        <option value="lb">lb</option>
-      </select>
-    </label>
-    <label>TZ:
-      <input id="tz" placeholder="Asia/Tokyo (or 'system')" />
-    </label>
-    <button id="refresh">Refresh</button>
-    <span id="msg"></span>
+  <div class="head">
+    <h2>Google Fit – Weight (kg)</h2>
+    <button id="signIn">Sign in &amp; Fetch</button>
   </div>
+  <div id="msg"></div>
   <canvas id="chart"></canvas>
 </div>
 
-<!-- Google Identity Services (OAuth 2.0 for user tokens) -->
+<!-- Google Identity Services -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<!-- Chart.js for plotting -->
+<!-- Chart.js + Annotation plugin -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
 
 <script>
-  // ===== Helpers =====
+  // ===== Query params =====
   const qs = new URLSearchParams(location.search);
-  const clientId = qs.get("client_id") || ""; // REQUIRED
-  const daysParam = Math.max(7, Math.min(3650, Number(qs.get("days") || 90)));
-  const unitParam = (qs.get("unit") || "kg").toLowerCase() === "lb" ? "lb" : "kg";
-  const tzParam = qs.get("tz") || "Asia/Tokyo";
+  const clientId = qs.get("client_id") || "";
+  const days = Math.max(7, Math.min(3650, Number(qs.get("days") || 90)));
+  const tz = qs.get("tz") || "Asia/Tokyo";
+  const goalParam = qs.get("goal");
+  const goalKg = goalParam !== null && goalParam !== "" ? Number(goalParam) : null; // kg
 
-  const daysInput = document.getElementById("days");
-  const unitSelect = document.getElementById("unit");
-  const tzInput = document.getElementById("tz");
+  // ===== DOM =====
   const msg = document.getElementById("msg");
-  daysInput.value = String(daysParam);
-  unitSelect.value = unitParam;
-  tzInput.value = tzParam;
+  const signInBtn = document.getElementById("signIn");
+  const ctx = document.getElementById("chart");
+  const log = (t)=> msg.textContent = t;
 
+  // Register annotation plugin
+  Chart.register(window['chartjs-plugin-annotation']);
+
+  // ===== OAuth (GIS) =====
   const SCOPES = "https://www.googleapis.com/auth/fitness.body.read";
-  let tokenClient = null;
-  let accessToken = null;
+  let accessToken = null, tokenClient = null;
 
-  function log(m) { msg.textContent = m; }
-  function toLb(kg) { return kg * 2.2046226218; }
+  function readyGIS(){
+    return new Promise(r=>{
+      const i = setInterval(()=>{
+        if (window.google?.accounts?.oauth2){ clearInterval(i); r(); }
+      }, 50);
+    });
+  }
 
-  // Use Aggregate API: https://developers.google.com/fit/rest/v1/users/dataset/aggregate
-  // We bucket by 1 day and request com.google.weight
-  async function fetchWeightSeries(days, tz) {
+  async function ensureToken(){
+    if (accessToken) return accessToken;
+    if (!clientId) throw new Error("Missing ?client_id=YOUR_CLIENT_ID.apps.googleusercontent.com");
+    await readyGIS();
+    return new Promise((resolve, reject)=>{
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: SCOPES,
+        prompt: "",
+        callback: (resp)=>{
+          if (resp.error) { reject(resp); return; }
+          accessToken = resp.access_token;
+          resolve(accessToken);
+        }
+      });
+      tokenClient.requestAccessToken();
+    });
+  }
+
+  // ===== Google Fit fetch (daily buckets, kg) =====
+  async function fetchWeightSeries(days, tz){
     const now = Date.now();
-    const start = now - days * 24 * 60 * 60 * 1000;
+    const start = now - days * 24*60*60*1000;
 
     const body = {
       aggregateBy: [{ dataTypeName: "com.google.weight" }],
-      bucketByTime: { durationMillis: 24 * 60 * 60 * 1000 },
+      bucketByTime: { durationMillis: 24*60*60*1000 },
       startTimeMillis: start,
       endTimeMillis: now
     };
 
     const res = await fetch("https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
+      headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
 
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`Fitness API error ${res.status}: ${t}`);
+    if (!res.ok){
+      throw new Error(`Fitness API error ${res.status}: ${await res.text()}`);
     }
     const json = await res.json();
 
-    // Parse buckets -> pick the latest value in each day if exists
     const points = [];
-    for (const b of (json.bucket || [])) {
+    for (const b of (json.bucket || [])){
       const endMs = Number(b.endTimeMillis);
-      const ds = (b.dataset && b.dataset[0]) ? b.dataset[0] : null;
+      const ds = b.dataset?.[0];
       let kg = null;
-      if (ds && Array.isArray(ds.point) && ds.point.length) {
-        // choose last point's value
-        const p = ds.point[ds.point.length - 1];
-        if (p.value && p.value[0]) {
-          // weight is a "fpVal" (kg)
-          kg = p.value[0].fpVal;
-        }
+      if (ds?.point?.length){
+        const p = ds.point[ds.point.length - 1]; // latest in that day
+        kg = p.value?.[0]?.fpVal ?? null; // kg
       }
-      // push even if null to preserve gaps (Chart.js can show gaps)
       points.push({ t: endMs, kg });
     }
 
-    // format labels with timezone
-    const fmt = (ms) => {
+    const fmt = (ms)=>{
       const d = new Date(ms);
-      if (tz && tz !== "system") {
-        return d.toLocaleString("ja-JP", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
-      }
-      return d.toLocaleDateString();
+      return (tz && tz !== "system")
+        ? d.toLocaleDateString("ja-JP", { timeZone: tz })
+        : d.toLocaleDateString();
     };
 
     const labels = points.map(p => fmt(p.t));
@@ -121,12 +123,27 @@
     return { labels, valuesKg };
   }
 
-  // ===== Chart.js =====
-  const ctx = document.getElementById("chart");
+  // ===== Chart rendering =====
   let chart = null;
-  function renderChart(labels, valuesKg, unit) {
-    const data = unit === "lb" ? valuesKg.map(v => v == null ? null : toLb(v)) : valuesKg;
-    const uLabel = unit === "lb" ? "Weight (lb)" : "Weight (kg)";
+
+  function axisFromGoal(valuesKg, goalKg){
+    const nums = valuesKg.filter(v => Number.isFinite(v));
+    if (!nums.length){
+      if (Number.isFinite(goalKg)){
+        return { min: goalKg, max: goalKg + 1 }; // minimal span
+      }
+      return {};
+    }
+    const maxVal = Math.max(...nums);
+    if (!Number.isFinite(goalKg)){
+      return {}; // auto
+    }
+    const head = Math.max(0.5, maxVal * 0.02); // a little headroom
+    return { min: goalKg, max: Math.max(maxVal, goalKg + head) };
+  }
+
+  function renderChart(labels, valuesKg){
+    const yRange = axisFromGoal(valuesKg, goalKg);
 
     if (chart) chart.destroy();
     chart = new Chart(ctx, {
@@ -134,9 +151,8 @@
       data: {
         labels,
         datasets: [{
-          label: uLabel,
-          data,
-          spanGaps: false,
+          data: valuesKg,
+          spanGaps: true,   // 欠測があっても線で結ぶ
           pointRadius: 2,
           borderWidth: 2,
           tension: 0.2
@@ -146,78 +162,64 @@
         responsive: true,
         animation: false,
         plugins: {
-          legend: { display: true }
+          legend: { display: false },
+          annotation: Number.isFinite(goalKg) ? {
+            annotations: {
+              goalLine: {
+                type: 'line',
+                yMin: goalKg,
+                yMax: goalKg,
+                borderColor: 'red',
+                borderWidth: 2,
+                borderDash: [6, 4],
+                label: {
+                  enabled: true,
+                  content: `Goal ${goalKg} kg`,
+                  color: 'red',
+                  position: 'end',
+                  backgroundColor: 'rgba(229,57,53,0.08)',
+                  font: { weight: '600' }
+                }
+              }
+            }
+          } : {}
         },
         scales: {
           x: { ticks: { maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: false }
+          y: {
+            beginAtZero: false,
+            min: yRange.min,
+            max: yRange.max
+          }
         }
       }
     });
   }
 
-  // ===== OAuth (GIS) =====
-  async function ensureToken() {
-    if (accessToken) return accessToken;
-    if (!clientId) {
-      throw new Error("Missing client_id. Append ?client_id=YOUR_CLIENT_ID to the URL.");
-    }
-    // Wait for GIS to be ready
-    await new Promise(r => {
-      const i = setInterval(() => {
-        if (window.google && window.google.accounts && window.google.accounts.oauth2) {
-          clearInterval(i); r();
-        }
-      }, 50);
-    });
-
-    return new Promise((resolve, reject) => {
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPES,
-        prompt: "", // empty = silent if possible, otherwise consent
-        callback: (resp) => {
-          if (resp.error) { reject(resp); return; }
-          accessToken = resp.access_token;
-          resolve(accessToken);
-        }
-      });
-      tokenClient.requestAccessToken(); // may open a consent popup
-    });
-  }
-
-  async function run() {
-    try {
+  // ===== Run =====
+  async function run(){
+    try{
       log("Authorizing…");
       await ensureToken();
       log("Fetching weight…");
-      const days = Number(daysInput.value) || 90;
-      const unit = unitSelect.value;
-      const tz = tzInput.value || "Asia/Tokyo";
       const { labels, valuesKg } = await fetchWeightSeries(days, tz);
-      renderChart(labels, valuesKg, unit);
-      log(`Done • ${labels.length} days`);
-    } catch (e) {
+      renderChart(labels, valuesKg);
+      log(`Done • ${labels.length} days${Number.isFinite(goalKg)?` • goal=${goalKg} kg`:""}`);
+    }catch(e){
       console.error(e);
       log(e.message || String(e));
     }
   }
 
-  document.getElementById("signIn").onclick = run;
-  document.getElementById("refresh").onclick = run;
+  signInBtn.onclick = run;
 
-  // Auto-run if token can be obtained silently (returning visitors)
-  window.addEventListener("load", async () => {
-    try {
-      if (clientId) {
-        await ensureToken(); // may be silent
-        await run();
-      } else {
-        log("Set ?client_id=… to start.");
-      }
-    } catch (e) {
-      // ignore; user can click "Sign in & Fetch"
-      console.warn("Silent auth failed:", e);
+  // Try silent on load
+  window.addEventListener("load", async ()=>{
+    if (!clientId){ log("Set ?client_id=…"); return; }
+    try{
+      await ensureToken(); // may be silent
+      await run();
+    }catch(e){
       log("Click “Sign in & Fetch”.");
     }
   });
