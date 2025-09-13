@@ -10,17 +10,20 @@
   .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .head h2 { margin: 0; font-size: 14px; font-weight: 600; opacity: .85; }
   .head small { opacity: .6; }
+
   .frame { position: relative; width: 100%; max-width: 100%; overflow: hidden; }
   .ph {
-    width: 100%; height: 300px; /* JSで上書き */
-    display: block; background:
-      linear-gradient(120deg, #eee 25%, #f7f7f7 37%, #eee 63%);
-    background-size: 400% 100%; animation: shimmer 1.3s infinite;
+    width: 100%; height: 300px; /* JSで上書きされます */
+    display: block;
+    background: linear-gradient(120deg, #eee 25%, #f7f7f7 37%, #eee 63%);
+    background-size: 400% 100%;
+    animation: shimmer 1.3s infinite;
     border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.12);
     object-fit: cover; object-position: center;
   }
   @keyframes shimmer { 0%{background-position: 100% 0} 100%{background-position: 0 0} }
-  /* 画像左下のキャプション（白文字） */
+
+  /* 画像左下：キャプション（白文字・小さめ） */
   .cap {
     position: absolute; bottom: 6px; left: 8px;
     font-size: 12px; color: #fff; max-width: 88%;
@@ -28,13 +31,14 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     user-select: none; pointer-events: none;
   }
-  /* 画像右下のバージョン（白文字） */
+  /* 画像右下：バージョン（白文字・極小） */
   .ver {
     position: absolute; bottom: 6px; right: 8px;
     font-size: 10px; color: #fff;
     text-shadow: 0 0 4px rgba(0,0,0,.6);
     user-select: none; pointer-events: none;
   }
+
   a.noline { text-decoration: none; color: inherit; display:block; }
 </style>
 
@@ -54,14 +58,15 @@
 </div>
 
 <script>
-/* ======== バージョン ======== */
-const DEFAULT_APP_VERSION = "0.02";
+/* ========= バージョン ========= */
+const DEFAULT_APP_VERSION = "0.03";
 
-/* ======== クエリ ========
-   q: テーマ語（例: q=cat,city,night）→ Unsplash から日替わり
-   source: auto|bing|unsplash（既定:auto。qがあればunsplash、無ければbing）
-   proxy: 1/0 Unsplash をプロキシ経由で取得（既定1）
-   w: 幅（px数値 or 100% 等、既定 100%）
+/* ========= クエリ =========
+   source: auto|bing|unsplash|wikimedia|nasa|picsum（既定 auto）
+   q: テーマ語（例: q=cat,city,night）→ UnsplashやPicsumのseedに使用
+   proxy: 1/0（Unsplash画像を images.weserv.nl 経由で取得、既定1）
+   nasa_key: NASA APODのAPIキー（既定 DEMO_KEY）
+   w: 幅（px数値 or 100% など、既定 100%）
    h: 高さ（px、既定 300）
    fit: cover|contain（既定 cover）
    radius: 角丸px（既定 12）
@@ -70,13 +75,16 @@ const DEFAULT_APP_VERSION = "0.02";
    caption: 1/0 キャプション表示（既定 1）
    mkt: Bingの地域（既定 ja-JP）
    tz: タイムゾーン（既定 Asia/Tokyo）
-   ver: バージョン文字列（既定 DEFAULT_APP_VERSION）
-   header: 0で見出し＋バージョンも非表示（既定 表示）
+   ver: 表示するバージョン文字列（既定 DEFAULT_APP_VERSION）
+   header: 0 で見出し＋バージョン非表示（既定 表示）
+   link: 0 でクリック不可（既定 1 = クリックで出典へ）
+   scroll: 0/1 ページのスクロール表示（既定 0 = 隠す）
 */
 const qs = new URLSearchParams(location.search);
-const Q = qs.get("q") || "";
 const SOURCE = (qs.get("source") || "auto").toLowerCase();
-const USE_PROXY = qs.get("proxy") !== "0"; // Unsplash時のみ使用
+const Q = qs.get("q") || "";
+const USE_PROXY = qs.get("proxy") !== "0";
+const NASA_KEY = qs.get("nasa_key") || "DEMO_KEY";
 const WQ = qs.get("w") || "100%";
 const HQ = Math.max(120, Number(qs.get("h") || 300));
 const FIT = (qs.get("fit") || "cover");
@@ -88,8 +96,10 @@ const MKT = qs.get("mkt") || "ja-JP";
 const TZ = qs.get("tz") || "Asia/Tokyo";
 const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
 const SHOW_HEADER = qs.get("header") !== "0";
+const LINK_ENABLED = qs.get("link") !== "0";
+const SHOW_SCROLL = qs.get("scroll") === "1";
 
-/* ======== DOM ======== */
+/* ========= DOM ========= */
 const head = document.getElementById("head");
 const frame = document.getElementById("frame");
 const img = document.getElementById("img");
@@ -97,7 +107,10 @@ const href = document.getElementById("href");
 const cap = document.getElementById("cap");
 const verEl = document.getElementById("ver");
 
-/* ヘッダー/バージョン制御 */
+/* スクロール制御（埋め込み時に邪魔なスクロールを消す） */
+if (!SHOW_SCROLL) { document.documentElement.style.overflow = "hidden"; document.body.style.overflow = "hidden"; }
+
+/* ヘッダー/バージョン/日付 */
 if (!SHOW_HEADER) { head.style.display = "none"; verEl.style.display = "none"; }
 document.getElementById("date").textContent =
   new Date().toLocaleDateString("ja-JP", { timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit" });
@@ -110,15 +123,22 @@ img.style.objectFit = (FIT === "contain") ? "contain" : "cover";
 img.style.borderRadius = RADIUS + "px";
 if (BORDER) img.style.border = BORDER;
 if (!SHADOW) img.style.boxShadow = "none";
+if (!LINK_ENABLED) { href.removeAttribute("href"); href.style.pointerEvents = "none"; }
 
-/* ======== 取得ロジック ======== */
-function todaySeed(tz) {
+/* ========= ユーティリティ ========= */
+function todayParts(tz){
   const d = new Date(new Date().toLocaleString("en-US",{ timeZone: tz }));
-  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), dd = String(d.getDate()).padStart(2,"0");
-  return `${y}${m}${dd}`;
+  return {
+    y: d.getFullYear(),
+    m: String(d.getMonth()+1).padStart(2,"0"),
+    d: String(d.getDate()).padStart(2,"0")
+  };
 }
+function todaySeed(tz){ const p = todayParts(tz); return `${p.y}${p.m}${p.d}`; }
 
-/* Bing: 今日の壁紙 */
+/* ========= 各ソース取得 ========= */
+
+/* 1) Bing: 今日の壁紙 */
 async function fetchBing() {
   const api = `https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=${encodeURIComponent(MKT)}`;
   const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(api)}`;
@@ -133,26 +153,24 @@ async function fetchBing() {
   return { url, page: "https://www.bing.com", title, credit: copy || "Bing" };
 }
 
-/* Unsplash: テーマ画像（日替わり） */
+/* 2) Unsplash: テーマ画像（日替わり）。必要ならプロキシ経由 */
 function buildUnsplashUrl(q, w, h, seed) {
   const kw = (q || "landscape").split(",").map(s=>s.trim()).filter(Boolean).join(",");
   const dims = (/^\d+$/.test(String(w)) && /^\d+$/.test(String(h))) ? `/${w}x${h}` : "";
   return `https://source.unsplash.com/featured${dims}/?${encodeURIComponent(kw)}&sig=${encodeURIComponent(seed)}`;
 }
-/* 画像プロキシ（weserv） */
 function proxyUrl(u, w, h, fit) {
   const naked = u.replace(/^https?:\/\//, "");
   const ps = [`url=${encodeURIComponent(naked)}`];
   if (/^\d+$/.test(String(w))) ps.push(`w=${w}`);
   if (/^\d+$/.test(String(h))) ps.push(`h=${h}`);
   if (fit === "cover" || fit === "contain") ps.push(`fit=${fit}`);
-  // we=1: WebP等の最適化（対応ブラウザで有効）
   ps.push("we=1");
   return `https://images.weserv.nl/?${ps.join("&")}`;
 }
 async function fetchUnsplash() {
-  const seed = todaySeed(TZ);
   const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const seed = todaySeed(TZ) + (Q ? "_" + Q : "");
   const direct = buildUnsplashUrl(Q, wnum, HQ, seed);
   const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct;
   return {
@@ -163,57 +181,96 @@ async function fetchUnsplash() {
   };
 }
 
-/* 画像読込 with タイムアウト＆フォールバック */
+/* 3) Wikimedia: Featured Picture（英語版Wikipediaのfeatured feed）。CORS対応 */
+async function fetchWikimedia() {
+  const p = todayParts(TZ);
+  const api = `https://en.wikipedia.org/api/rest_v1/feed/featured/${p.y}/${p.m}/${p.d}`;
+  const res = await fetch(api, { cache: "no-store" });
+  if (!res.ok) throw new Error("Wikimedia fetch failed: " + res.status);
+  const data = await res.json();
+  // data.image.image.source に大きめURLが入るケースが多い
+  const src = data?.image?.image?.source || data?.image?.thumbnail?.source;
+  if (!src) throw new Error("Wikimedia: no image source");
+  const title = data?.image?.title || "Wikimedia Picture of the Day";
+  // 説明テキスト（HTML込みのことがあるのでプレーン化）
+  const descHtml = (data?.image?.description?.text || "").replace(/<[^>]*>/g,"").trim();
+  const credit = "Wikimedia Commons";
+  return { url: src, page: "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day", title: descHtml || title, credit };
+}
+
+/* 4) NASA APOD: 画像のみ（動画の日はサムネイルを使う） */
+async function fetchNasa() {
+  const p = todayParts(TZ);
+  const api = `https://api.nasa.gov/planetary/apod?api_key=${encodeURIComponent(NASA_KEY)}&thumbs=true&date=${p.y}-${p.m}-${p.d}`;
+  const res = await fetch(api, { cache: "no-store" });
+  if (!res.ok) throw new Error("NASA APOD fetch failed: " + res.status);
+  const j = await res.json();
+  const isImg = j.media_type === "image";
+  const url = isImg ? (j.hdurl || j.url) : (j.thumbnail_url || j.url);
+  if (!url) throw new Error("NASA APOD: no image URL");
+  const title = j.title || "NASA Astronomy Picture of the Day";
+  const credit = j.copyright ? `NASA / ${j.copyright}` : "NASA APOD";
+  return { url, page: j.hdurl || j.url || "https://apod.nasa.gov/", title, credit };
+}
+
+/* 5) Picsum: シンプルなランダム（seedで日替わり） */
+async function fetchPicsum() {
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const seed = todaySeed(TZ) + (Q ? "_" + Q : "");
+  const url = `https://picsum.photos/seed/${encodeURIComponent(seed)}/${wnum}/${HQ}`;
+  return { url, page: "https://picsum.photos/", title: Q ? `Picsum – ${Q}` : "Picsum – Random", credit: "Picsum" };
+}
+
+/* 画像読込 with タイムアウト＆確実なフォールバック */
 function loadImageWithTimeout(src, timeoutMs = 6000) {
   return new Promise((resolve, reject)=>{
     let done = false;
     const i = new Image();
     const timer = setTimeout(()=>{ if (!done){ done = true; reject(new Error("Image load timeout")); } }, timeoutMs);
     i.onload = ()=>{ if (!done){ done = true; clearTimeout(timer); resolve(); } };
-    i.onerror = e => { if (!done){ done = true; clearTimeout(timer); reject(new Error("Image load error")); } };
-    i.referrerPolicy = (src.includes("bing.com")) ? "no-referrer" : ""; // Unsplashにはreferrer付ける（空=ブラウザ既定）
+    i.onerror = ()=>{ if (!done){ done = true; clearTimeout(timer); reject(new Error("Image load error")); } };
+    // Bingはreferrer無い方が通りやすい。その他は既定でOK
+    i.referrerPolicy = (src.includes("bing.com")) ? "no-referrer" : "";
     i.src = src;
   });
 }
 
+/* 優先ソース → 失敗時フォールバック */
 async function resolveImage() {
-  // 優先：指定 source、auto は q 有り→Unsplash / 無し→Bing
-  const preferUnsplash = SOURCE === "unsplash" || (SOURCE === "auto" && Q);
-  if (preferUnsplash) {
-    try {
-      const u = await fetchUnsplash();
-      await loadImageWithTimeout(u.url);
-      return u; // 成功
-    } catch (e) {
-      console.warn("Unsplash failed, fallback to Bing:", e);
-      // フォールバック
-      const b = await fetchBing();
-      await loadImageWithTimeout(b.url);
-      return b;
-    }
+  const order = [];
+  if (SOURCE === "auto") {
+    // Qありなら Unsplash→Wikimedia→Bing→Picsum→NASA
+    // Qなしなら Bing→Wikimedia→Unsplash→Picsum→NASA
+    order.push(Q ? fetchUnsplash : fetchBing, fetchWikimedia, Q ? fetchBing : fetchUnsplash, fetchPicsum, fetchNasa);
   } else {
+    const map = {
+      bing: fetchBing, unsplash: fetchUnsplash, wikimedia: fetchWikimedia, nasa: fetchNasa, picsum: fetchPicsum
+    };
+    if (!map[SOURCE]) throw new Error("Unknown source: " + SOURCE);
+    order.push(map[SOURCE], fetchBing, fetchUnsplash, fetchPicsum, fetchNasa);
+  }
+
+  for (const fn of order) {
     try {
-      const b = await fetchBing();
-      await loadImageWithTimeout(b.url);
-      return b;
+      const r = await fn();
+      await loadImageWithTimeout(r.url);
+      return r;
     } catch (e) {
-      console.warn("Bing failed, fallback to Unsplash:", e);
-      const u = await fetchUnsplash();
-      await loadImageWithTimeout(u.url);
-      return u;
+      console.warn("source failed:", e);
+      continue;
     }
   }
+  throw new Error("All sources failed");
 }
 
-/* ======== 表示 ======== */
+/* ========= 表示 ========= */
 (async () => {
   try {
     const { url, page, title, credit } = await resolveImage();
     img.onload = () => img.classList.remove("ph");
-    // Unsplash直リンク時は referrer を既定に（no-referrer だと拒否される環境がある）
     img.referrerPolicy = (url.includes("bing.com")) ? "no-referrer" : "";
     img.src = url;
-    href.href = page || url;
+    href.href = LINK_ENABLED ? (page || url) : "javascript:void(0)";
 
     if (CAPTION) {
       cap.style.display = "";
