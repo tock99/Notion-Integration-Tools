@@ -2,74 +2,36 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>RainViewer Radar (Compact, Bottom HUD)</title>
-<link
-  rel="stylesheet"
-  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
 <style>
-  html,
-  body,
-  #map {
-    height: 100%;
-    margin: 0;
-  }
-  .leaflet-control-attribution {
-    font-size: 10px;
-  }
-  /* ==== 極小・下部重畳 ==== */
+  html, body, #map { height: 100%; margin: 0; }
+  .leaflet-control-attribution { font-size: 10px; }
   .hud {
-    position: fixed;
-    left: 50%;
-    bottom: 8px;
-    transform: translateX(-50%);
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: #000b;
-    color: #fff;
-    border-radius: 10px;
-    padding: 4px 6px;
+    position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%);
+    z-index: 1000; display: flex; align-items: center; gap: 6px;
+    background: #000b; color: #fff; border-radius: 10px; padding: 4px 6px;
     font: 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
       "Hiragino Sans", "Noto Sans JP", sans-serif;
     backdrop-filter: blur(3px);
   }
   .hud button {
-    cursor: pointer;
-    border: 0;
-    border-radius: 8px;
-    padding: 2px 6px;
-    background: #fff1;
-    color: #fff;
-    font-size: 11px;
+    cursor: pointer; border: 0; border-radius: 8px; padding: 2px 6px;
+    background: #fff1; color: #fff; font-size: 11px;
   }
-  .hud button:hover {
-    background: #fff2;
-  }
-  .hud input[type="range"] {
-    width: 160px;
-    height: 12px;
-  }
-  .sep {
-    opacity: 0.5;
-  }
+  .hud button:hover { background: #fff2; }
+  .hud input[type="range"] { width: 160px; height: 12px; }
+  .sep { opacity: 0.5; }
+  .hidden { display: none !important; }
 </style>
 
 <div id="map"></div>
 
 <!-- 下部・極小HUD（アイコン＋時刻のみ） -->
-<div class="hud" aria-label="Radar controls">
+<div class="hud" id="hud" aria-label="Radar controls">
   <button id="play" title="再生/一時停止">▶</button>
   <span class="sep">|</span>
-  <input
-    id="slider"
-    type="range"
-    min="0"
-    max="0"
-    step="1"
-    value="0"
-    aria-label="フレーム"
-  />
+  <input id="slider" type="range" min="0" max="0" step="1" value="0" aria-label="フレーム"/>
   <span class="sep">|</span>
   <button id="locate" title="現在地へ">📍</button>
   <span id="time" style="opacity: 0.85"></span>
@@ -77,6 +39,61 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+  // ======== URL パラメータ処理 ========
+  const params = new URLSearchParams(location.search);
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  function getNum(name, def, min = -Infinity, max = Infinity) {
+    const v = params.get(name);
+    if (v === null) return def;
+    const n = Number(v);
+    return Number.isFinite(n) ? clamp(n, min, max) : def;
+  }
+  function getBool(name, def) {
+    const v = params.get(name);
+    if (v === null) return def;
+    return v === "1" || v.toLowerCase() === "true";
+  }
+  function getStr(name, def) {
+    const v = params.get(name);
+    return v === null ? def : v;
+  }
+
+  // View 設定
+  let ll = null;
+  if (params.get("ll")) {
+    const [latStr, lonStr] = params.get("ll").split(",");
+    const lat = Number(latStr), lon = Number(lonStr);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) ll = [lat, lon];
+  } else if (params.get("lat") && params.get("lon")) {
+    const lat = Number(params.get("lat")), lon = Number(params.get("lon"));
+    if (Number.isFinite(lat) && Number.isFinite(lon)) ll = [lat, lon];
+  }
+  const zoom = getNum("z", 7, 2, 18);
+
+  // bounds=lat1,lon1,lat2,lon2
+  let bounds = null;
+  if (params.get("bounds")) {
+    const a = params.get("bounds").split(",").map(Number);
+    if (a.length === 4 && a.every(Number.isFinite)) {
+      bounds = [[a[0], a[1]], [a[2], a[3]]];
+    }
+  }
+
+  const useGeoloc = getBool("geoloc", true);
+  const autoplay = getBool("autoplay", false);
+  const speed = getNum("speed", 1100, 200, 5000);
+  const radarOpacity = getNum("opacity", 0.75, 0, 1);
+  const tz = getStr("tz", "Asia/Tokyo"); // "system"ならブラウザ標準
+
+  // frame=last | number | negative-from-end
+  const frameParam = getStr("frame", "last");
+
+  const showHud = getBool("hud", true);
+  if (!showHud) document.getElementById("hud").classList.add("hidden");
+
+  // ======== 地図初期化 ========
   const map = L.map("map");
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
@@ -84,70 +101,86 @@
   }).addTo(map);
 
   let userMarker = null;
-  function setUserMarker(ll) {
+  function setUserMarker(latlng) {
     if (userMarker) map.removeLayer(userMarker);
-    userMarker = L.marker(ll).addTo(map);
+    userMarker = L.marker(latlng).addTo(map);
   }
 
+  // 表示範囲優先順位: bounds > ll > geoloc > fallback
+  function applyInitialView() {
+    if (bounds) {
+      map.fitBounds(bounds);
+      return;
+    }
+    if (ll) {
+      map.setView(ll, zoom);
+      return;
+    }
+    if (useGeoloc && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const here = [pos.coords.latitude, pos.coords.longitude];
+          setUserMarker(here);
+          map.setView(here, 10);
+        },
+        () => fallback(),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
+      );
+    } else {
+      fallback();
+    }
+  }
+  function fallback() {
+    // 関西～関東がおおよそ収まるビュー
+    map.setView([35.0, 138.0], 7.0);
+  }
+
+  // ======== RainViewer アニメーション制御 ========
   const slider = document.getElementById("slider");
   const timeLabel = document.getElementById("time");
   const playBtn = document.getElementById("play");
 
-  let frames = [],
-    currentLayer = null,
-    idx = 0,
-    playing = false,
-    timer = null;
-
-  // RainViewer: 過去+予報フレームを取得
-  fetch("https://api.rainviewer.com/public/weather-maps.json")
-    .then((r) => r.json())
-    .then((data) => {
-      frames = (data.radar?.past || []).concat(data.radar?.nowcast || []);
-      if (!frames.length) {
-        console.warn("No frames");
-        return;
-      }
-      slider.max = frames.length - 1;
-      slider.value = String(frames.length - 1);
-      showFrame(+slider.value);
-    })
-    .catch((e) => console.error("RainViewer fetch error", e));
+  let frames = [], currentLayer = null, idx = 0, playing = false, timer = null;
 
   function tileUrl(f) {
     // 256pxタイル / color=1 / smooth=1
     return `https://tilecache.rainviewer.com/v2/radar/${f.path}/256/{z}/{x}/{y}/2/1_1.png`;
   }
+
+  function formatTime(unixSec) {
+    const d = new Date(unixSec * 1000);
+    if (tz && tz !== "system") {
+      return d.toLocaleString("ja-JP", { timeZone: tz });
+    }
+    return d.toLocaleString(); // ブラウザ既定
+  }
+
   function showFrame(i) {
     if (!frames.length) return;
+    i = ((i % frames.length) + frames.length) % frames.length; // wrap & 正
     if (currentLayer) map.removeLayer(currentLayer);
     const f = frames[i];
-    currentLayer = L.tileLayer(tileUrl(f), { opacity: 0.75 });
+    currentLayer = L.tileLayer(tileUrl(f), { opacity: radarOpacity });
     currentLayer.addTo(map);
     idx = i;
     slider.value = String(i);
-    const t = new Date(f.time * 1000).toLocaleString("ja-JP", {
-      timeZone: "Asia/Tokyo",
-    });
-    timeLabel.textContent = t;
+    timeLabel.textContent = formatTime(f.time);
   }
-  function stepNext() {
-    showFrame((idx + 1) % frames.length);
-  }
-  function updatePlayBtn() {
-    playBtn.textContent = playing ? "⏸" : "▶";
-  }
+
+  function stepNext() { showFrame(idx + 1); }
+  function updatePlayBtn() { playBtn.textContent = playing ? "⏸" : "▶"; }
 
   playBtn.onclick = () => {
     if (!frames.length) return;
     playing = !playing;
     if (playing) {
-      timer = setInterval(stepNext, 1100);
+      timer = setInterval(stepNext, speed);
     } else {
       clearInterval(timer);
     }
     updatePlayBtn();
   };
+
   slider.oninput = () => {
     if (playing) {
       playing = false;
@@ -157,25 +190,50 @@
     showFrame(+slider.value);
   };
 
-  function goCurrent() {
-    if (!navigator.geolocation) {
-      fallback();
-      return;
-    }
+  document.getElementById("locate").onclick = () => {
+    if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const ll = [pos.coords.latitude, pos.coords.longitude];
-        setUserMarker(ll);
-        map.setView(ll, 10);
+        const here = [pos.coords.latitude, pos.coords.longitude];
+        setUserMarker(here);
+        map.setView(here, 10);
       },
-      () => fallback(),
+      () => {},
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
     );
-  }
-  function fallback() {
-    map.setView([35.0, 138.0], 7.0);
-  } // 関西～関東が収まる目安
+  };
 
-  document.getElementById("locate").onclick = goCurrent;
-  goCurrent(); // デフォルトで現在地試行
+  // ======== 起動フロー ========
+  applyInitialView();
+
+  fetch("https://api.rainviewer.com/public/weather-maps.json")
+    .then((r) => r.json())
+    .then((data) => {
+      frames = (data.radar?.past || []).concat(data.radar?.nowcast || []);
+      if (!frames.length) {
+        console.warn("No frames from RainViewer.");
+        return;
+      }
+      slider.max = frames.length - 1;
+
+      // 初期フレーム決定
+      let initialIndex = frames.length - 1; // last
+      if (frameParam !== "last") {
+        const n = Number(frameParam);
+        if (Number.isInteger(n)) {
+          initialIndex = n >= 0 ? clamp(n, 0, frames.length - 1)
+                                : clamp(frames.length + n, 0, frames.length - 1);
+        }
+      }
+      slider.value = String(initialIndex);
+      showFrame(initialIndex);
+
+      // 自動再生
+      if (autoplay) {
+        playing = true;
+        updatePlayBtn();
+        timer = setInterval(stepNext, speed);
+      }
+    })
+    .catch((e) => console.error("RainViewer fetch error", e));
 </script>
