@@ -7,9 +7,9 @@
   .wrap { max-width: 900px; margin: 20px auto; padding: 0 12px; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .head h2 { margin: 12px 0; font-weight: 600; }
-  .head button { font-size: 14px; padding: 6px 10px; cursor: pointer; }
-  #msg { font-size: 12px; opacity: .7; margin: 6px 0 10px; }
-  /* 固定高さ（約2/3）。横は親幅に合わせるが、描画解像度はJSで固定 */
+  /* 小さめボタン */
+  .head button { font-size: 12px; padding: 4px 8px; cursor: pointer; border-radius: 6px; }
+  /* 固定高さで安定表示（Notion向け） */
   canvas { width: 100%; height: 280px; display:block; }
 </style>
 
@@ -18,137 +18,188 @@
     <h2 id="title">Google Fit – Weight</h2>
     <button id="signIn">Sign in &amp; Fetch</button>
   </div>
-  <div id="msg"></div>
   <canvas id="chart"></canvas>
 </div>
 
-<!-- （クライアントモード用）Google Identity Services -->
+<!-- Frontend OAuth（frontendモード時のみ使用） -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<!-- Chart.js + annotation（線だけ使う） -->
+<!-- Chart.js + 時間軸アダプタ + annotation -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
 
 <script>
-  /* ===== ここだけ変えればOK（バージョン表記） ===== */
-  const APP_VERSION = "0.02";
+  /* ===== 表示バージョン（?ver= で上書き可） ===== */
+  const DEFAULT_APP_VERSION = "0.03";
 
-  /* ===== クエリ取得 ===== */
+  /* ===== クエリ ===== */
   const qs = new URLSearchParams(location.search);
-  const endpoint = qs.get("endpoint");            // Apps Script 等のJSONエンドポイント（Notion推奨）
-  const clientId = qs.get("client_id") || "";     // クライアントOAuth用（単体タブ推奨）
+  const modeParam = (qs.get("mode") || "auto").toLowerCase(); // server | frontend | auto
+  const endpointRaw = qs.get("endpoint") || "";
+  const clientId = qs.get("client_id") || "";
   const days = Math.max(7, Math.min(3650, Number(qs.get("days") || 90)));
   const tz = qs.get("tz") || "Asia/Tokyo";
-  const goalParam = qs.get("goal");
-  const goalKg = goalParam !== null && goalParam !== "" ? Number(goalParam) : null;
+  const goalKg = qs.has("goal") ? Number(qs.get("goal")) : null;
+  const yminQ = qs.has("ymin") ? Number(qs.get("ymin")) : null;
+  const ymaxQ = qs.has("ymax") ? Number(qs.get("ymax")) : null;
+  const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
+
+  // 実行モード
+  let activeMode = "frontend";
+  if (modeParam === "server") activeMode = "server";
+  else if (modeParam === "frontend") activeMode = "frontend";
+  else activeMode = endpointRaw ? "server" : "frontend"; // auto
 
   /* ===== DOM ===== */
   const titleEl = document.getElementById("title");
-  const msg = document.getElementById("msg");
   const signInBtn = document.getElementById("signIn");
   const canvas = document.getElementById("chart");
   const ctx2d = canvas.getContext("2d");
-  const log = (t)=> (msg.textContent = t);
 
-  // タイトルにバージョン
   titleEl.textContent = `Google Fit – Weight (ver: ${APP_VERSION})`;
 
-  // Chart.js 全体デフォルトを抑制（レスポンシブ無効 / DPR固定）
+  /* ===== Chart.js 安定化 ===== */
   Chart.defaults.responsive = false;
   Chart.defaults.devicePixelRatio = 1;
   Chart.register(window['chartjs-plugin-annotation']);
 
-  /* ===== キャンバスの物理解像度を一度だけ固定 ===== */
+  // 物理解像度固定（Notionのリサイズ干渉を回避）
   function fixCanvasPixelSize() {
-    // 親のCSSレイアウト幅を取得して、その時点の幅で固定
     const cssWidth = Math.max(320, Math.floor(canvas.getBoundingClientRect().width));
-    canvas.width = cssWidth;   // 物理解像度（px）
-    canvas.height = 280;       // 物理解像度（px）CSS高さと一致
+    canvas.width = cssWidth;
+    canvas.height = 280;
   }
 
-  /* ===== Y軸レンジ（仕様） ===== */
+  /* ===== Y軸レンジ計算 =====
+     既定: min = (goalあり) ? goal-1 : データ最小-1
+           max = データ最大+1
+     クエリ yMin / yMax があれば優先
+  */
   function yRangeFrom(valuesKg, goalKg){
     const nums = valuesKg.filter(v => Number.isFinite(v));
-    if (!nums.length){
-      if (Number.isFinite(goalKg)) return { min: goalKg - 1, max: goalKg + 1 };
-      return {}; // データゼロなら自動に任せる
+    let minAuto, maxAuto;
+    if (nums.length) {
+      const minVal = Math.min(...nums), maxVal = Math.max(...nums);
+      minAuto = Number.isFinite(goalKg) ? (goalKg - 1) : (minVal - 1);
+      maxAuto = maxVal + 1;
+    } else {
+      // データゼロ時の最低限
+      if (Number.isFinite(goalKg)) { minAuto = goalKg - 1; maxAuto = goalKg + 1; }
+      else { minAuto = undefined; maxAuto = undefined; }
     }
-    const minVal = Math.min(...nums), maxVal = Math.max(...nums);
-    const min = Number.isFinite(goalKg) ? (goalKg - 1) : (minVal - 1);
-    const max = maxVal + 1;
+    let min = Number.isFinite(yminQ) ? yminQ : minAuto;
+    let max = Number.isFinite(ymaxQ) ? ymaxQ : maxAuto;
+    // min/max の整合性確保
+    if (Number.isFinite(min) && Number.isFinite(max) && min >= max) {
+      max = min + 1;
+    }
     return { min, max };
   }
 
   /* ===== 描画 ===== */
   let chart = null;
-  function renderChart(labels, labelsFull, valuesKg){
+  function renderChart(points){ // points: [{t(ms), kg}]
+    const dates = points.map(p => new Date(p.t));
+    const valuesKg = points.map(p => p.kg);
+
     const range = yRangeFrom(valuesKg, goalKg);
 
     if (chart) { chart.destroy(); chart = null; }
     chart = new Chart(ctx2d, {
       type: "line",
       data: {
-        labels,
+        labels: dates,         // Date objects
         datasets: [{
           data: valuesKg,
-          spanGaps: true,    // 欠測でも線で結ぶ
+          spanGaps: true,      // 欠測でも線で結ぶ
           pointRadius: 2,
           borderWidth: 2,
           tension: 0.2
         }]
       },
       options: {
-        // レイアウトを安定化：リサイズ監視・イベント・アニメーションを切る
         responsive: false,
         animation: false,
-        events: [],                 // ← マウス/タッチイベントを完全無効化
-        maintainAspectRatio: false, // 高さは固定（CSS/属性）
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
-          tooltip: { enabled: false },
+          tooltip: {
+            enabled: true,
+            callbacks: {
+              label(ctx){
+                const ms = ctx.parsed.x;
+                const v = ctx.parsed.y;
+                const d = new Date(ms);
+                const dateStr = (tz && tz !== "system")
+                  ? d.toLocaleDateString("ja-JP", { timeZone: tz, year:"numeric", month:"2-digit", day:"2-digit" })
+                  : d.toLocaleDateString("ja-JP", { year:"numeric", month:"2-digit", day:"2-digit" });
+                return `${dateStr} ${Number.isFinite(v) ? v.toFixed(2) + "kg" : "-"}`;
+              },
+              title(){ return ""; }
+            }
+          },
           annotation: Number.isFinite(goalKg) ? {
             annotations: {
               goalLine: {
                 type: 'line',
                 yMin: goalKg, yMax: goalKg,
-                borderColor: 'red', borderWidth: 2, borderDash: [6,4]
-                // ラベルは外して最小限に（再フロー要因を減らす）
+                borderColor: 'red',
+                borderWidth: 2,
+                borderDash: [6, 4]
               }
             }
           } : {}
         },
         scales: {
-          x: { ticks: { maxRotation: 0, autoSkip: true } },
+          x: {
+            type: "time",
+            time: { unit: "day" }, // データは日次
+            ticks: {
+              // 本日基準で週ごとに表示（MM/DD）
+              callback: (val, idx, ticks) => {
+                const v = this && this.getLabelForValue ? this.getLabelForValue(val) : null;
+                // Chart.js v4 の time スケールでは ctx が無いので、ticks[idx].value を使う
+                const ms = ticks[idx] && ticks[idx].value ? ticks[idx].value : null;
+                if (ms == null) return "";
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const d = new Date(ms);
+                const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                const diff = Math.round((today - day) / 86400000); // 日差
+                if (diff % 7 === 0) {
+                  const s = (tz && tz !== "system")
+                    ? day.toLocaleDateString("ja-JP", { timeZone: tz, month:"2-digit", day:"2-digit" })
+                    : day.toLocaleDateString("ja-JP", { month:"2-digit", day:"2-digit" });
+                  return s; // MM/DD
+                }
+                return "";
+              },
+              maxRotation: 0,
+              autoSkip: false
+            }
+          },
           y: { beginAtZero: false, min: range.min, max: range.max }
         }
       }
     });
   }
 
-  /* ===== データ取得（サーバーモード） ===== */
-  async function fetchFromEndpoint(){
-    const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}days=${encodeURIComponent(days)}`;
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) throw new Error(`Endpoint error ${r.status}`);
-    const j = await r.json(); // { points: [{t,kg}, ...] }
-
-    const fmtMMDD = (ms)=>{
-      const d = new Date(ms), o = { month:"2-digit", day:"2-digit" };
-      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
-                                     : d.toLocaleDateString("ja-JP", o);
-    };
-    const fmtYYYYMMDD = (ms)=>{
-      const d = new Date(ms), o = { year:"numeric", month:"2-digit", day:"2-digit" };
-      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
-                                     : d.toLocaleDateString("ja-JP", o);
-    };
-
-    const labels = j.points.map(p => fmtMMDD(p.t));        // X軸は MM/DD 表示
-    const labelsFull = j.points.map(p => fmtYYYYMMDD(p.t)); // 予備（今は未使用）
-    const valuesKg = j.points.map(p => p.kg);
-    return { labels, labelsFull, valuesKg };
+  /* ===== データ取得 ===== */
+  // endpoint はエンコード/非エンコードの両対応
+  function buildEndpointUrl(raw){
+    try { return new URL(raw); }
+    catch(_){ try { return new URL(decodeURIComponent(raw)); } catch(e){ throw e; } }
   }
 
-  /* ===== クライアントモード（参考：Notionでは推奨しない） ===== */
+  async function fetchFromEndpoint(){
+    const u = buildEndpointUrl(endpointRaw);
+    u.searchParams.set("days", String(days));
+    const r = await fetch(u.toString(), { cache: "no-store" });
+    if (!r.ok) throw new Error(`Endpoint error ${r.status}`);
+    const j = await r.json(); // { points: [{t,kg}, ...] }
+    return j.points || [];
+  }
+
   const SCOPES = "https://www.googleapis.com/auth/fitness.body.read";
   let accessToken = null, tokenClient = null;
 
@@ -169,10 +220,11 @@
       tokenClient.requestAccessToken();
     });
   }
+
   async function fetchFromFit(){
     const now = Date.now(), start = now - days*86400000;
     const body = {
-      aggregateBy: [{ dataTypeName: "com.google.weight" }],
+      aggregateBy: [{ dataSourceId: "derived:com.google.weight:com.google.android.gms:merge_weight" }],
       bucketByTime: { durationMillis: 86400000 },
       startTimeMillis: start, endTimeMillis: now
     };
@@ -183,56 +235,37 @@
     });
     if (!res.ok) throw new Error(`Fitness API error ${res.status}`);
     const json = await res.json();
-
     const pts = (json.bucket||[]).map(b=>{
       const endMs = Number(b.endTimeMillis);
       const ds = b.dataset?.[0]; let kg = null;
       if (ds?.point?.length){ const p = ds.point[ds.point.length-1]; kg = p.value?.[0]?.fpVal ?? null; }
       return { t: endMs, kg };
     });
-
-    const fmtMMDD = (ms)=> {
-      const d = new Date(ms), o={month:"2-digit",day:"2-digit"};
-      return (tz && tz!=="system") ? d.toLocaleDateString("ja-JP",{timeZone:tz,...o}) : d.toLocaleDateString("ja-JP",o);
-    };
-    const fmtYYYYMMDD = (ms)=>{
-      const d = new Date(ms), o={year:"numeric",month:"2-digit",day:"2-digit"};
-      return (tz && tz!=="system") ? d.toLocaleDateString("ja-JP",{timeZone:tz,...o}) : d.toLocaleDateString("ja-JP",o);
-    };
-
-    return {
-      labels: pts.map(p=>fmtMMDD(p.t)),
-      labelsFull: pts.map(p=>fmtYYYYMMDD(p.t)),
-      valuesKg: pts.map(p=>p.kg)
-    };
+    return pts;
   }
 
   /* ===== 実行 ===== */
   async function run(){
     try{
-      // 1) 先にキャンバスの物理解像度を確定 → 2) 描画
       fixCanvasPixelSize();
 
-      log("Loading…");
-      if (endpoint){
-        signInBtn.style.display = "none"; // サーバーモードはボタン不要
-        const { labels, labelsFull, valuesKg } = await fetchFromEndpoint();
-        renderChart(labels, labelsFull, valuesKg);
-        log(`Done • ${labels.length} days${Number.isFinite(goalKg)?` • goal=${goalKg} kg`:""}`);
-        return;
+      if (activeMode === "server") {
+        signInBtn.style.display = "none";
+        const points = await fetchFromEndpoint();
+        renderChart(points);
+      } else {
+        signInBtn.style.display = ""; // 小さめボタン（CSS）
+        await ensureToken();
+        const points = await fetchFromFit();
+        renderChart(points);
       }
-      await ensureToken(); // クライアントモード
-      const { labels, labelsFull, valuesKg } = await fetchFromFit();
-      renderChart(labels, labelsFull, valuesKg);
-      log(`Done • ${labels.length} days${Number.isFinite(goalKg)?` • goal=${goalKg} kg`:""}`);
     }catch(e){
       console.error(e);
-      log(e.message || String(e));
+      // 画面へのステータス表示は撤去（ご要望どおり）
+      alert(e.message || String(e)); // 必要なら削除可
     }
   }
 
-  // アクセス時に自動実行（リサイズ監視は一切しない）
   window.addEventListener("load", run);
-  // 任意で手動実行も残す
   signInBtn.onclick = run;
 </script>
