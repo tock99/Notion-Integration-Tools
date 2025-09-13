@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Google Fit: Weight Chart (kg)</title>
+<title>Google Fit: Weight Chart</title>
 <style>
   html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; }
   .wrap { max-width: 900px; margin: 20px auto; padding: 0 12px; }
@@ -9,149 +9,65 @@
   .head h2 { margin: 12px 0; font-weight: 600; }
   .head button { font-size: 14px; padding: 6px 10px; cursor: pointer; }
   #msg { font-size: 12px; opacity: .7; margin: 6px 0 10px; }
-  /* 高さを約2/3（従来420px→約280px） */
-  canvas { width: 100%; height: 280px; }
+  canvas { width: 100%; height: 280px; } /* 2/3 高さ */
 </style>
 
 <div class="wrap">
   <div class="head">
-    <h2>Google Fit – Weight (kg)</h2>
+    <h2 id="title">Google Fit – Weight</h2>
     <button id="signIn">Sign in &amp; Fetch</button>
   </div>
   <div id="msg"></div>
   <canvas id="chart"></canvas>
 </div>
 
-<!-- Google Identity Services -->
+<!-- Google Identity Services（クライアントモードで使用） -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<!-- Chart.js + Annotation plugin -->
+<!-- Chart.js + Annotation -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
 
 <script>
-  // ===== Query params =====
+  /* ===== 設定（ここだけ変えればOK） ===== */
+  const APP_VERSION = "0.01"; // ← バージョン表記
+
+  /* ===== クエリ取得 ===== */
   const qs = new URLSearchParams(location.search);
-  const clientId = qs.get("client_id") || "";
+  const endpoint = qs.get("endpoint");            // Apps Script 等のサーバーJSON (Notion推奨)
+  const clientId = qs.get("client_id") || "";     // クライアントOAuth用（単体タブ推奨）
   const days = Math.max(7, Math.min(3650, Number(qs.get("days") || 90)));
   const tz = qs.get("tz") || "Asia/Tokyo";
   const goalParam = qs.get("goal");
-  const goalKg = goalParam !== null && goalParam !== "" ? Number(goalParam) : null; // kg
+  const goalKg = goalParam !== null && goalParam !== "" ? Number(goalParam) : null;
 
-  // ===== DOM =====
+  /* ===== DOM ===== */
+  const titleEl = document.getElementById("title");
   const msg = document.getElementById("msg");
   const signInBtn = document.getElementById("signIn");
   const ctx = document.getElementById("chart");
-  const log = (t)=> msg.textContent = t;
+  const log = (t)=> (msg.textContent = t);
 
-  // Register annotation plugin
+  // タイトルにバージョンを反映
+  titleEl.textContent = `Google Fit – Weight (ver: ${APP_VERSION})`;
+
   Chart.register(window['chartjs-plugin-annotation']);
 
-  // ===== OAuth (GIS) =====
-  const SCOPES = "https://www.googleapis.com/auth/fitness.body.read";
-  let accessToken = null, tokenClient = null;
-
-  function readyGIS(){
-    return new Promise(r=>{
-      const i = setInterval(()=>{
-        if (window.google?.accounts?.oauth2){ clearInterval(i); r(); }
-      }, 50);
-    });
-  }
-
-  async function ensureToken(){
-    if (accessToken) return accessToken;
-    if (!clientId) throw new Error("Missing ?client_id=YOUR_CLIENT_ID.apps.googleusercontent.com");
-    await readyGIS();
-    return new Promise((resolve, reject)=>{
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPES,
-        prompt: "", // silent if possible, otherwise consent popup
-        callback: (resp)=>{
-          if (resp.error) { reject(resp); return; }
-          accessToken = resp.access_token;
-          resolve(accessToken);
-        }
-      });
-      tokenClient.requestAccessToken(); // 自動でリクエスト（初回はポップアップの可能性）
-    });
-  }
-
-  // ===== Google Fit fetch (daily buckets, kg) =====
-  async function fetchWeightSeries(days, tz){
-    const now = Date.now();
-    const start = now - days * 24*60*60*1000;
-
-    const body = {
-      aggregateBy: [{ dataTypeName: "com.google.weight" }],
-      bucketByTime: { durationMillis: 24*60*60*1000 },
-      startTimeMillis: start,
-      endTimeMillis: now
-    };
-
-    const res = await fetch("https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok){
-      throw new Error(`Fitness API error ${res.status}: ${await res.text()}`);
-    }
-    const json = await res.json();
-
-    const points = [];
-    for (const b of (json.bucket || [])){
-      const endMs = Number(b.endTimeMillis);
-      const ds = b.dataset?.[0];
-      let kg = null;
-      if (ds?.point?.length){
-        const p = ds.point[ds.point.length - 1]; // latest in that day
-        kg = p.value?.[0]?.fpVal ?? null; // kg
-      }
-      points.push({ t: endMs, kg });
-    }
-
-    // X軸は MM/DD、ツールチップでは YYYY/MM/DD を表示
-    const fmtMMDD = (ms)=>{
-      const d = new Date(ms);
-      const o = { month: "2-digit", day: "2-digit" };
-      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
-                                     : d.toLocaleDateString("ja-JP", o);
-    };
-    const fmtYYYYMMDD = (ms)=>{
-      const d = new Date(ms);
-      const o = { year: "numeric", month: "2-digit", day: "2-digit" };
-      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
-                                     : d.toLocaleDateString("ja-JP", o);
-    };
-
-    const labels = points.map(p => fmtMMDD(p.t));
-    const labelsFull = points.map(p => fmtYYYYMMDD(p.t)); // for tooltip
-    const valuesKg = points.map(p => p.kg);
-    return { labels, labelsFull, valuesKg };
-  }
-
-  // ===== Y軸レンジ計算（仕様通りに固定） =====
+  /* ===== 共通: 軸レンジ/描画 ===== */
   function yRangeFrom(valuesKg, goalKg){
     const nums = valuesKg.filter(v => Number.isFinite(v));
     if (!nums.length){
       if (Number.isFinite(goalKg)) return { min: goalKg - 1, max: goalKg + 1 };
-      return {}; // データがなければ自動
+      return {};
     }
-    const minVal = Math.min(...nums);
-    const maxVal = Math.max(...nums);
+    const minVal = Math.min(...nums), maxVal = Math.max(...nums);
     const min = Number.isFinite(goalKg) ? (goalKg - 1) : (minVal - 1);
     const max = maxVal + 1;
     return { min, max };
   }
 
-  // ===== Chart rendering =====
   let chart = null;
-
   function renderChart(labels, labelsFull, valuesKg){
     const range = yRangeFrom(valuesKg, goalKg);
-
     if (chart) chart.destroy();
     chart = new Chart(ctx, {
       type: "line",
@@ -159,7 +75,7 @@
         labels,
         datasets: [{
           data: valuesKg,
-          spanGaps: true,   // 欠測があっても線で結ぶ
+          spanGaps: true,       // 欠測でも線で結ぶ
           pointRadius: 2,
           borderWidth: 2,
           tension: 0.2
@@ -167,39 +83,21 @@
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false, // CSSの高さ(280px)を優先
+        maintainAspectRatio: false,
         animation: false,
         plugins: {
           legend: { display: false },
-          tooltip: {
-            callbacks: {
-              // 1行で「YYYY/MM/DD XX.XXkg」
-              label(ctx){
-                const i = ctx.dataIndex;
-                const date = labelsFull[i];
-                const v = ctx.parsed.y;
-                if (v == null || !Number.isFinite(v)) return `${date} –`;
-                return `${date} ${v.toFixed(2)}kg`;
-              },
-              title(){ return ''; } // タイトル行は使わない
-            }
-          },
+          tooltip: { enabled: false },  // ← ツールチップ無効化（スクロール抑止）
           annotation: Number.isFinite(goalKg) ? {
             annotations: {
               goalLine: {
                 type: 'line',
-                yMin: goalKg,
-                yMax: goalKg,
-                borderColor: 'red',
-                borderWidth: 2,
-                borderDash: [6, 4],
+                yMin: goalKg, yMax: goalKg,
+                borderColor: 'red', borderWidth: 2, borderDash: [6,4],
                 label: {
-                  enabled: true,
-                  content: `Goal ${goalKg} kg`,
-                  color: 'red',
-                  position: 'end',
-                  backgroundColor: 'rgba(229,57,53,0.08)',
-                  font: { weight: '600' }
+                  enabled: true, content: `Goal ${goalKg} kg`,
+                  color: 'red', position: 'end',
+                  backgroundColor: 'rgba(229,57,53,0.08)', font: { weight: '600' }
                 }
               }
             }
@@ -207,23 +105,108 @@
         },
         scales: {
           x: { ticks: { maxRotation: 0, autoSkip: true } },
-          y: {
-            beginAtZero: false,
-            min: range.min,
-            max: range.max
-          }
+          y: { beginAtZero: false, min: range.min, max: range.max }
         }
       }
     });
   }
 
-  // ===== Run =====
+  /* ===== サーバーモード（Notion向け） ===== */
+  async function fetchFromEndpoint(){
+    const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}days=${encodeURIComponent(days)}`;
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`Endpoint error ${r.status}`);
+    const j = await r.json(); // { points: [{t,kg}, ...] }
+
+    const fmtMMDD = (ms)=>{
+      const d = new Date(ms), o = { month: "2-digit", day: "2-digit" };
+      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
+                                     : d.toLocaleDateString("ja-JP", o);
+    };
+    const fmtYYYYMMDD = (ms)=>{
+      const d = new Date(ms), o = { year:"numeric", month:"2-digit", day:"2-digit" };
+      return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
+                                     : d.toLocaleDateString("ja-JP", o);
+    };
+
+    const labels = j.points.map(p => fmtMMDD(p.t));       // 表示は MM/DD
+    const labelsFull = j.points.map(p => fmtYYYYMMDD(p.t)); // 予備（今は未使用）
+    const valuesKg = j.points.map(p => p.kg);
+    return { labels, labelsFull, valuesKg };
+  }
+
+  /* ===== クライアントモード（単体タブ推奨） ===== */
+  const SCOPES = "https://www.googleapis.com/auth/fitness.body.read";
+  let accessToken = null, tokenClient = null;
+
+  function readyGIS(){
+    return new Promise(r=>{
+      const i = setInterval(()=>{ if (window.google?.accounts?.oauth2){ clearInterval(i); r(); }}, 50);
+    });
+  }
+  async function ensureToken(){
+    if (accessToken) return accessToken;
+    if (!clientId) throw new Error("Missing ?client_id=");
+    await readyGIS();
+    return new Promise((resolve, reject)=>{
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId, scope: SCOPES, prompt: "",
+        callback: (resp)=> resp.error ? reject(resp) : (accessToken = resp.access_token, resolve(accessToken))
+      });
+      tokenClient.requestAccessToken();
+    });
+  }
+  async function fetchFromFit(){
+    const now = Date.now(), start = now - days*86400000;
+    const body = {
+      aggregateBy: [{ dataTypeName: "com.google.weight" }],
+      bucketByTime: { durationMillis: 86400000 },
+      startTimeMillis: start, endTimeMillis: now
+    };
+    const res = await fetch("https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`Fitness API error ${res.status}`);
+    const json = await res.json();
+
+    const pts = (json.bucket||[]).map(b=>{
+      const endMs = Number(b.endTimeMillis);
+      const ds = b.dataset?.[0]; let kg = null;
+      if (ds?.point?.length){ const p = ds.point[ds.point.length-1]; kg = p.value?.[0]?.fpVal ?? null; }
+      return { t: endMs, kg };
+    });
+
+    const fmtMMDD = (ms)=> {
+      const d = new Date(ms), o={month:"2-digit",day:"2-digit"};
+      return (tz && tz!=="system") ? d.toLocaleDateString("ja-JP",{timeZone:tz,...o}) : d.toLocaleDateString("ja-JP",o);
+    };
+    const fmtYYYYMMDD = (ms)=>{
+      const d = new Date(ms), o={year:"numeric",month:"2-digit",day:"2-digit"};
+      return (tz && tz!=="system") ? d.toLocaleDateString("ja-JP",{timeZone:tz,...o}) : d.toLocaleDateString("ja-JP",o);
+    };
+
+    return {
+      labels: pts.map(p=>fmtMMDD(p.t)),
+      labelsFull: pts.map(p=>fmtYYYYMMDD(p.t)),
+      valuesKg: pts.map(p=>p.kg)
+    };
+  }
+
+  /* ===== 実行 ===== */
   async function run(){
     try{
-      log("Authorizing…");
-      await ensureToken();
-      log("Fetching weight…");
-      const { labels, labelsFull, valuesKg } = await fetchWeightSeries(days, tz);
+      log("Loading…");
+      if (endpoint){
+        signInBtn.style.display = "none"; // サーバーモードはボタン不要
+        const { labels, labelsFull, valuesKg } = await fetchFromEndpoint();
+        renderChart(labels, labelsFull, valuesKg);
+        log(`Done • ${labels.length} days${Number.isFinite(goalKg)?` • goal=${goalKg} kg`:""}`);
+        return;
+      }
+      await ensureToken(); // クライアントモード
+      const { labels, labelsFull, valuesKg } = await fetchFromFit();
       renderChart(labels, labelsFull, valuesKg);
       log(`Done • ${labels.length} days${Number.isFinite(goalKg)?` • goal=${goalKg} kg`:""}`);
     }catch(e){
@@ -232,9 +215,8 @@
     }
   }
 
-  // クリックでも実行可
-  signInBtn.onclick = run;
-
-  // アクセス時に自動サインイン＆取得（ポップアップが必要な場合あり）
+  // アクセス時に自動実行
   window.addEventListener("load", run);
+  // 手動実行も一応残す
+  signInBtn.onclick = run;
 </script>
