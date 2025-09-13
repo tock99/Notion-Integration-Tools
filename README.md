@@ -92,3 +92,49 @@ https://tock99.github.io/Notion-Integration-Tools/weather_radar.html?geoloc=0&bo
 * Kansai region in Japan  
 https://tock99.github.io/Notion-Integration-Tools/weather_radar.html?geoloc=0&bounds=33.5,134.0,35.5,137.5
 ![Rain Radar in Kansai Screenshot](./sample/rain_radar_sample_kansai_region.png)
+
+---
+
+### 4. Google Fit Visualizer
+
+Display your **body weight (kg)** history from **Google Fit** as a clean, embeddable chart.
+Works in both **frontend OAuth** and **server (Apps Script) JSON** modes.
+If OAuth popups are blocked in Notion, use **server mode**.
+
+**Public URL**
+[https://tock99.github.io/Notion-Integration-Tools/google_fit_visualizer.html](https://tock99.github.io/Notion-Integration-Tools/google_fit_visualizer.html)
+
+**How to Embed into Notion**
+
+1. Open the page in Notion where you want the widget to appear
+2. Type `/embed` and select **Embed**
+3. Paste the public URL above (add query parameters as needed)
+4. The weight chart will be displayed inside Notion ✅
+
+<br>
+
+**🔧 Optional URL Parameters**
+
+You can customize the chart by adding query parameters to the URL.
+
+| Parameter       | Type / Example                                                        | Description                                                                                      |
+| --------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `mode`          | `mode=server` / `frontend` / `auto`                                   | Choose data source mode. Default: `auto` (uses `server` if `endpoint` is set).                   |
+| `endpoint`      | `endpoint=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FXXXX%2Fexec` | Apps Script **Web App** URL (URL-encoded recommended). Used in `server`/`auto`.                  |
+| `client_id`     | `client_id=YOUR_ID.apps.googleusercontent.com`                        | Google OAuth **Web Client ID**. Used in `frontend`/`auto` when `endpoint` is absent.             |
+| `days`          | `days=180`                                                            | Number of days to fetch (7–3650). Default: `90`.                                                 |
+| `goal`          | `goal=72`                                                             | Goal weight (kg). Draws a red horizontal line; default y-min becomes `goal-1`.                   |
+| `ymin` / `ymax` | `ymin=65&ymax=80`                                                     | Override y-axis min/max (kg). If omitted: min = (`goal`? `goal-1` : dataMin-1), max = dataMax+1. |
+| `w`             | `w=720` / `w=100%25`                                                  | Chart width. Number = px; `%`/`auto` allowed. Default: `100%`.                                   |
+| `h`             | `h=240`                                                               | Chart height in px. Default: `280`.                                                              |
+| `tz`            | `tz=Asia/Tokyo` / `tz=system`                                         | Time zone for labels/tooltip. Default: `Asia/Tokyo`.                                             |
+| `ver`           | `ver=0.31`                                                            | Tiny gray version tag shown at the **top-right corner** of the chart.                            |
+| `header`        | `header=0`                                                            | Hide the chart header (title & button). Default: `1` (show).                                     |
+| `pad`           | `pad=0` / `pad=12`                                                    | Horizontal padding (px). Use `0` to avoid horizontal scrollbars in tight embeds. Default: `12`.  |
+| `scroll`        | `scroll=1` / `0`                                                      | Allow page scrollbars. Default: `0` (hide).                                                      |
+
+**Behavior highlights**
+
+* X-axis labels auto-skip to avoid overlap and **always include today**
+* Hover tooltip shows `YYYY/MM/DD` and the weight (kg)
+* Goal (if set) is shown as a **dashed red line**
