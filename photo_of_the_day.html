@@ -6,7 +6,7 @@
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; }
-  /* 余白ゼロ（必要なら pad / margin クエリで上書き） */
+  /* 余白ゼロ（pad / margin で上書き可） */
   .wrap { margin: 0; padding: 0; width: 100%; max-width: none; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .head h2 { margin: 0; font-size: 14px; font-weight: 600; opacity: .85; }
@@ -17,8 +17,7 @@
     width: 100%; height: 300px; /* JSで上書き */
     display: block;
     background: linear-gradient(120deg, #eee 25%, #f7f7f7 37%, #eee 63%);
-    background-size: 400% 100%;
-    animation: shimmer 1.3s infinite;
+    background-size: 400% 100%; animation: shimmer 1.3s infinite;
     border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.12);
     object-fit: cover; object-position: center;
   }
@@ -39,7 +38,7 @@
     text-shadow: 0 0 4px rgba(0,0,0,.6);
     user-select: none; pointer-events: none;
   }
-  /* デバッグ用オーバーレイ */
+  /* デバッグオーバーレイ */
   .dbg {
     position: fixed; top: 6px; left: 8px; z-index: 1000;
     font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -47,7 +46,7 @@
     display: none; white-space: pre-wrap; max-width: 90vw;
   }
 
-  a.noline { text-decoration: none; color: inherit; display:block; }
+  a.noline { text-decoration: none; color: inherit; display:block; position: relative; }
 </style>
 
 <div class="wrap" id="wrap">
@@ -68,21 +67,23 @@
 
 <script>
 /* ========= バージョン ========= */
-const DEFAULT_APP_VERSION = "0.04";
+const DEFAULT_APP_VERSION = "0.05";
 
 /* ========= クエリ =========
    source: auto|bing|unsplash|wikimedia|nasa|picsum（既定 auto）
    q: テーマ語（Unsplash/Picsum seed）
-   proxy: 1/0 Unsplash直リンクが失敗時にプロキシ再試行（既定1=使う）
-   nasa_key: NASA APODのAPIキー（既定 DEMO_KEY）
-   w,h,fit,radius,shadow,border,caption,mkt,tz,ver,header,link,scroll,pad,margin は前回と同様
+   proxy: 1/0 Unsplash直リンク失敗時にプロキシ再試行（既定1）
+   sizing: canvas|box（既定 canvas）
+   w,h: 表示サイズ（canvas: 枠サイズ / box: 上限サイズ）
+   fit: cover|contain（canvas時のみ有効）
+   radius,shadow,border,caption,mkt,tz,ver,header,link,scroll,pad,margin は従来どおり
    debug: 1で左上に進行状況表示
 */
 const qs = new URLSearchParams(location.search);
 const SOURCE = (qs.get("source") || "auto").toLowerCase();
 const Q = qs.get("q") || "";
 const USE_PROXY = qs.get("proxy") !== "0";
-const NASA_KEY = qs.get("nasa_key") || "DEMO_KEY";
+const SIZING = (qs.get("sizing") || "canvas").toLowerCase();  // ★ 新規
 const WQ = qs.get("w") || "100%";
 const HQ = Math.max(120, Number(qs.get("h") || 300));
 const FIT = (qs.get("fit") || "cover");
@@ -91,6 +92,7 @@ const SHADOW = qs.get("shadow") !== "0";
 const BORDER = qs.get("border") || "";
 const CAPTION = qs.get("caption") !== "0";
 const MKT = qs.get("mkt") || "ja-JP";
+const NASA_KEY = qs.get("nasa_key") || "DEMO_KEY";
 const TZ = qs.get("tz") || "Asia/Tokyo";
 const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
 const SHOW_HEADER = qs.get("header") !== "0";
@@ -104,13 +106,13 @@ const DEBUG = qs.get("debug") === "1";
 const wrap = document.getElementById("wrap");
 const head = document.getElementById("head");
 const frame = document.getElementById("frame");
-const img = document.getElementById("img");
 const href = document.getElementById("href");
+const img = document.getElementById("img");
 const cap = document.getElementById("cap");
 const verEl = document.getElementById("ver");
 const dbg = document.getElementById("dbg");
 
-/* スクロール/余白/ヘッダー */
+/* ========= レイアウト適用 ========= */
 if (!SHOW_SCROLL) { document.documentElement.style.overflow = "hidden"; document.body.style.overflow = "hidden"; }
 wrap.style.padding = PAD + "px";
 wrap.style.margin = MARGIN + "px";
@@ -118,16 +120,37 @@ if (!SHOW_HEADER) { head.style.display = "none"; verEl.style.display = "none"; }
 document.getElementById("date").textContent =
   new Date().toLocaleDateString("ja-JP", { timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit" });
 verEl.textContent = "ver " + APP_VERSION;
+if (DEBUG) dbg.style.display = "block";
 
-/* サイズ・スタイル */
-if (/^\d+(\.\d+)?$/.test(WQ)) { frame.style.width = WQ + "px"; } else { frame.style.width = WQ; }
-img.style.height = HQ + "px";
-img.style.objectFit = (FIT === "contain") ? "contain" : "cover";
-img.style.borderRadius = RADIUS + "px";
-if (BORDER) img.style.border = BORDER;
-if (!SHADOW) img.style.boxShadow = "none";
-if (!LINK_ENABLED) { href.removeAttribute("href"); href.style.pointerEvents = "none"; }
-if (DEBUG) { dbg.style.display = "block"; }
+/* 枠サイズ適用（sizing 切替） */
+function applySizing() {
+  const isNumW = /^\d+(\.\d+)?$/.test(WQ);
+  if (SIZING === "box") {
+    // 枠は可変。画像はアスペクト比を保ったまま w×h の上限に収める
+    frame.style.width = isNumW ? "auto" : "100%";
+    frame.style.maxWidth = isNumW ? (WQ + "px") : "100%";
+    img.style.width = "auto";
+    img.style.height = "auto";
+    img.style.maxWidth = isNumW ? (WQ + "px") : "100%";
+    img.style.maxHeight = HQ + "px";
+    img.style.objectFit = ""; // 不要
+  } else {
+    // 従来のキャンバス固定モード
+    frame.style.maxWidth = "100%";
+    frame.style.width = isNumW ? (WQ + "px") : WQ;
+    img.style.width = "100%";
+    img.style.height = HQ + "px";
+    img.style.maxWidth = "";
+    img.style.maxHeight = "";
+    img.style.objectFit = (FIT === "contain") ? "contain" : "cover";
+  }
+  // 共通の角丸/枠/影
+  img.style.borderRadius = RADIUS + "px";
+  if (BORDER) img.style.border = BORDER;
+  if (!SHADOW) img.style.boxShadow = "none";
+  if (!LINK_ENABLED) { href.removeAttribute("href"); href.style.pointerEvents = "none"; }
+}
+applySizing();
 
 /* ========= 小道具 ========= */
 function log(s){ if (DEBUG) dbg.textContent += (dbg.textContent ? "\n" : "") + s; }
@@ -137,7 +160,7 @@ function todayParts(tz){
 }
 function todaySeed(tz){ const p = todayParts(tz); return `${p.y}${p.m}${p.d}`; }
 
-/* CORSテキスト取得（フェイルオーバー：AllOrigins → r.jina.ai） */
+/* CORSテキスト取得（AllOrigins → r.jina.ai） */
 async function fetchTextCORS(url){
   const naked = url.replace(/^https?:\/\//,'');
   const tries = [
@@ -166,18 +189,7 @@ function proxyUrl(u, w, h, fit) {
   return `https://images.weserv.nl/?${ps.join("&")}`;
 }
 
-/* 画像ロード（失敗時のプロキシ再試行つき） */
-async function tryLoadWithProxy(url, wnum){
-  try {
-    await loadImageWithTimeout(url);
-    return url;
-  } catch (e) {
-    log("direct load failed → proxy try");
-    const proxied = proxyUrl(url, wnum, HQ, FIT);
-    await loadImageWithTimeout(proxied);
-    return proxied;
-  }
-}
+/* 画像ロード（タイムアウト+失敗時プロキシ再試行） */
 function loadImageWithTimeout(src, timeoutMs = 7000) {
   return new Promise((resolve, reject)=>{
     let done = false;
@@ -188,6 +200,17 @@ function loadImageWithTimeout(src, timeoutMs = 7000) {
     i.referrerPolicy = (src.includes("bing.com")) ? "no-referrer" : "";
     i.src = src;
   });
+}
+async function tryLoadWithProxy(url, wnum){
+  try {
+    await loadImageWithTimeout(url);
+    return url;
+  } catch {
+    log("direct load failed → proxy try");
+    const proxied = proxyUrl(url, wnum, HQ, FIT);
+    await loadImageWithTimeout(proxied);
+    return proxied;
+  }
 }
 
 /* ========= 各ソース ========= */
@@ -213,7 +236,7 @@ async function fetchUnsplash() {
   const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
   const seed = todaySeed(TZ) + (Q ? "_" + Q : "");
   const direct = buildUnsplashUrl(Q, wnum, HQ, seed);
-  const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct; // まずは指定方針で
+  const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct;
   return { url, page: `https://unsplash.com/s/photos/${encodeURIComponent(Q || "landscape")}`, title: Q ? `テーマ: ${Q}` : "Unsplash featured", credit: "Unsplash", _wnum: wnum, _direct: direct };
 }
 async function fetchWikimedia() {
@@ -259,28 +282,23 @@ async function resolveImage() {
     if (!map[SOURCE]) throw new Error("Unknown source: " + SOURCE);
     order.push(map[SOURCE], fetchBing, fetchUnsplash, fetchPicsum, fetchNasa);
   }
-
   for (const fn of order) {
     try {
       const r = await fn();
       let finalUrl = r.url;
-      const wnum = r._wnum; // Unsplash用
-      // まず直接ロード → 失敗したら weserv で再試行
+      const wnum = r._wnum;
       try {
         await loadImageWithTimeout(finalUrl);
-      } catch (e) {
+      } catch {
         log("direct failed: " + (new URL(finalUrl).hostname));
         if (USE_PROXY) {
           finalUrl = proxyUrl(r._direct || finalUrl, wnum || (/^\d+$/.test(String(WQ)) ? Number(WQ) : 1200), HQ, FIT);
           await loadImageWithTimeout(finalUrl);
-        } else {
-          throw e;
-        }
+        } else { throw new Error("load failed"); }
       }
-      return { ...r, url: finalUrl }; // 成功
+      return { ...r, url: finalUrl };
     } catch (e) {
       log("source failed: " + e.message);
-      continue;
     }
   }
   throw new Error("All sources failed");
