@@ -7,14 +7,15 @@
   .wrap { max-width: 1200px; margin: 16px auto; padding: 0 12px; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .head h2 { margin: 8px 0; font-weight: 600; }
+  /* 小さめボタン */
   .head button { font-size: 12px; padding: 4px 8px; cursor: pointer; border-radius: 6px; }
-  /* キャンバス包む箱：相対配置してバージョンを右上に重ねる */
+  /* キャンバスを包む箱（右上にverを重ねる） */
   .chart-box { position: relative; }
   .chart-box .ver {
     position: absolute; top: 4px; right: 6px;
     font-size: 10px; color: #0009; user-select: none; pointer-events: none;
   }
-  /* 初期サイズはJSで上書き（w/h クエリに対応） */
+  /* 初期サイズ（w/hクエリでJSから上書き） */
   canvas { display:block; width: 100%; height: 280px; }
 </style>
 
@@ -38,8 +39,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
 
 <script>
-  /* ===== 既定バージョン（?ver= で上書き可） ===== */
-  const DEFAULT_APP_VERSION = "0.04";
+  /* ===== 表示バージョン（?ver= で上書き可能） ===== */
+  const DEFAULT_APP_VERSION = "0.05";
 
   /* ===== クエリ ===== */
   const qs = new URLSearchParams(location.search);
@@ -51,7 +52,7 @@
   const goalKg = qs.has("goal") ? Number(qs.get("goal")) : null;
   const yminQ = qs.has("ymin") ? Number(qs.get("ymin")) : null;
   const ymaxQ = qs.has("ymax") ? Number(qs.get("ymax")) : null;
-  const wQ = qs.get("w") || "100%";        // 幅: px数値 or 'auto'/'100%'
+  const wQ = qs.get("w") || "100%";        // 幅: 数値(px) or 'auto'/'100%' 等
   const hQ = Number(qs.get("h") || 280);   // 高さ(px)
   const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
 
@@ -67,32 +68,29 @@
   const signInBtn = document.getElementById("signIn");
   const canvas = document.getElementById("chart");
   const ctx2d = canvas.getContext("2d");
-
-  // バージョンは右上に極小表示
   verEl.textContent = `ver ${APP_VERSION}`;
 
-  /* ===== サイズ（w/h クエリ対応） ===== */
+  /* ===== サイズ（w/hクエリ対応） ===== */
   function applyCssSize() {
     // 幅
     if (/^\d+(\.\d+)?$/.test(wQ)) {
       box.style.width = wQ + "px";
       canvas.style.width = wQ + "px";
     } else {
-      // 'auto' や '100%' などはそのまま
       box.style.width = '100%';
-      canvas.style.width = wQ;
+      canvas.style.width = wQ; // '100%' など
     }
-    // 高さ
-    const h = Math.max(120, Math.floor(hQ)); // 最低120px
+    // 高さ（最低120px）
+    const h = Math.max(120, Math.floor(hQ));
     canvas.style.height = h + "px";
   }
 
-  // Chart.js 安定化
-  Chart.defaults.responsive = false;
-  Chart.defaults.devicePixelRatio = 1;
+  /* ===== Chart.js 安定化（Notion対策） ===== */
+  Chart.defaults.responsive = false;      // リサイズ監視を止める
+  Chart.defaults.devicePixelRatio = 1;    // DPR固定で再レイアウト抑制
   Chart.register(window['chartjs-plugin-annotation']);
 
-  // 物理解像度をCSSに合わせて固定（Notionのリサイズ干渉を回避）
+  // CSSサイズ確定後に物理解像度を固定
   function fixCanvasPixelSize() {
     const cssWidth = Math.max(200, Math.floor(canvas.getBoundingClientRect().width));
     const cssHeight = Math.max(120, Math.floor(canvas.getBoundingClientRect().height));
@@ -100,7 +98,11 @@
     canvas.height = cssHeight;
   }
 
-  /* ===== Y軸レンジ ===== */
+  /* ===== Y軸レンジ =====
+     既定: min = (goalあり) ? goal-1 : データ最小-1
+           max = データ最大+1
+     クエリ ymin/ymax があれば優先
+  */
   function yRangeFrom(valuesKg, goalKg){
     const nums = valuesKg.filter(v => Number.isFinite(v));
     let minAuto, maxAuto;
@@ -108,8 +110,8 @@
       const minVal = Math.min(...nums), maxVal = Math.max(...nums);
       minAuto = Number.isFinite(goalKg) ? (goalKg - 1) : (minVal - 1);
       maxAuto = maxVal + 1;
-    } else {
-      if (Number.isFinite(goalKg)) { minAuto = goalKg - 1; maxAuto = goalKg + 1; }
+    } else if (Number.isFinite(goalKg)) {
+      minAuto = goalKg - 1; maxAuto = goalKg + 1;
     }
     let min = Number.isFinite(yminQ) ? yminQ : minAuto;
     let max = Number.isFinite(ymaxQ) ? ymaxQ : maxAuto;
@@ -117,21 +119,24 @@
     return { min, max };
   }
 
-  /* ===== “今日の目盛りを必ず表示”プラグイン ===== */
+  /* ===== “今日の目盛りを必ず表示”プラグイン（安全版） ===== */
   const todayTickPlugin = {
     id: "todayTick",
-    afterBuildTicks(chart, args) {
-      const scale = args.scale;
-      if (scale.id !== "x") return;
-      const ticks = args.ticks;
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const exists = ticks.some(t => t.value === today);
-      if (!exists) {
-        ticks.push({ value: today, major: true });
-        ticks.sort((a,b)=>a.value-b.value);
+    afterBuildTicks(scale) {
+      try {
+        if (!scale || scale.id !== "x") return;
+        const ticks = Array.isArray(scale.ticks) ? scale.ticks : [];
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const hasToday = ticks.some(t => typeof t?.value === "number" && t.value === todayStart);
+        if (!hasToday) {
+          ticks.push({ value: todayStart, major: true });
+          ticks.sort((a,b)=>a.value - b.value);
+          scale.ticks = ticks; // 反映
+        }
+      } catch (e) {
+        console.warn("[todayTick] plugin error:", e);
       }
-      // 他のラベルは Chart.js の autoSkip に任せる（重複回避）
     }
   };
   Chart.register(todayTickPlugin);
@@ -160,7 +165,7 @@
         responsive: false,
         animation: false,
         maintainAspectRatio: false,
-        // ホバーは有効にしつつイベントは最小限（暴走抑止）
+        // ホバーは有効化（暴走抑止のためイベントは最小限）
         events: ["mousemove","mouseout"],
         interaction: { mode: "nearest", intersect: false },
         plugins: {
@@ -202,7 +207,7 @@
             ticks: {
               autoSkip: true,
               maxRotation: 0
-              // 今日の追加はプラグイン側で実施
+              // 今日の追加はプラグイン側で実施（重複しない限り他は自動）
             }
           },
           y: { beginAtZero: false, min: range.min, max: range.max }
@@ -243,7 +248,7 @@
         client_id: clientId, scope: SCOPES, prompt: "",
         callback: (resp)=> resp.error ? reject(resp) : (accessToken = resp.access_token, resolve(accessToken))
       });
-      tokenClient.requestAccessToken();
+      tokenClient.requestAccessToken(); // ※ Notion埋め込みでは弾かれやすい
     });
   }
 
@@ -273,7 +278,7 @@
   async function run(){
     try{
       applyCssSize();
-      // レイアウトが適用された後にピクセルサイズ確定
+      // レイアウト適用→次フレームでピクセルサイズ確定→描画
       requestAnimationFrame(()=>{
         fixCanvasPixelSize();
         (async ()=>{
