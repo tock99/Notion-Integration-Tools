@@ -12,7 +12,7 @@
   .head small { opacity: .6; }
   .frame { position: relative; width: 100%; max-width: 100%; overflow: hidden; }
   .ph {
-    width: 100%; height: 300px; /* JSで上書きされます */
+    width: 100%; height: 300px; /* JSで上書き */
     display: block; background:
       linear-gradient(120deg, #eee 25%, #f7f7f7 37%, #eee 63%);
     background-size: 400% 100%; animation: shimmer 1.3s infinite;
@@ -20,12 +20,22 @@
     object-fit: cover; object-position: center;
   }
   @keyframes shimmer { 0%{background-position: 100% 0} 100%{background-position: 0 0} }
+  /* 画像左下のキャプション（白文字） */
   .cap {
-    margin-top: 6px; font-size: 12px; opacity: .75;
+    position: absolute; bottom: 6px; left: 8px;
+    font-size: 12px; color: #fff; max-width: 88%;
+    text-shadow: 0 0 4px rgba(0,0,0,.6);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    user-select: none; pointer-events: none;
   }
-  .ver { position: absolute; top: 6px; right: 8px; font-size: 10px; opacity: .55; user-select: none; pointer-events: none; }
-  a.noline { text-decoration: none; color: inherit; }
+  /* 画像右下のバージョン（白文字） */
+  .ver {
+    position: absolute; bottom: 6px; right: 8px;
+    font-size: 10px; color: #fff;
+    text-shadow: 0 0 4px rgba(0,0,0,.6);
+    user-select: none; pointer-events: none;
+  }
+  a.noline { text-decoration: none; color: inherit; display:block; }
 </style>
 
 <div class="wrap" id="wrap">
@@ -35,19 +45,22 @@
   </div>
 
   <div class="frame" id="frame">
-    <div class="ver" id="ver"></div>
     <a id="href" class="noline" target="_blank" rel="noopener noreferrer">
       <img id="img" alt="今日の一枚" class="ph" referrerpolicy="no-referrer">
+      <div class="cap" id="cap"></div>
+      <div class="ver" id="ver"></div>
     </a>
   </div>
-
-  <div class="cap" id="cap" aria-live="polite"></div>
 </div>
 
 <script>
-/* ===== クエリ =====
+/* ======== バージョン ======== */
+const DEFAULT_APP_VERSION = "0.02";
+
+/* ======== クエリ ========
    q: テーマ語（例: q=cat,city,night）→ Unsplash から日替わり
    source: auto|bing|unsplash（既定:auto。qがあればunsplash、無ければbing）
+   proxy: 1/0 Unsplash をプロキシ経由で取得（既定1）
    w: 幅（px数値 or 100% 等、既定 100%）
    h: 高さ（px、既定 300）
    fit: cover|contain（既定 cover）
@@ -57,12 +70,13 @@
    caption: 1/0 キャプション表示（既定 1）
    mkt: Bingの地域（既定 ja-JP）
    tz: タイムゾーン（既定 Asia/Tokyo）
-   ver: 右上のバージョン表示（既定 0.10）
-   header: 0で見出し非表示（既定 表示）
+   ver: バージョン文字列（既定 DEFAULT_APP_VERSION）
+   header: 0で見出し＋バージョンも非表示（既定 表示）
 */
 const qs = new URLSearchParams(location.search);
 const Q = qs.get("q") || "";
-const SOURCE = (qs.get("source") || "auto").toLowerCase();     // auto|bing|unsplash
+const SOURCE = (qs.get("source") || "auto").toLowerCase();
+const USE_PROXY = qs.get("proxy") !== "0"; // Unsplash時のみ使用
 const WQ = qs.get("w") || "100%";
 const HQ = Math.max(120, Number(qs.get("h") || 300));
 const FIT = (qs.get("fit") || "cover");
@@ -72,35 +86,39 @@ const BORDER = qs.get("border") || "";
 const CAPTION = qs.get("caption") !== "0";
 const MKT = qs.get("mkt") || "ja-JP";
 const TZ = qs.get("tz") || "Asia/Tokyo";
-const VER = qs.get("ver") || "0.01";
+const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
 const SHOW_HEADER = qs.get("header") !== "0";
 
-document.getElementById("ver").textContent = "ver " + VER;
-if (!SHOW_HEADER) document.getElementById("head").style.display = "none";
-document.getElementById("date").textContent = new Date().toLocaleDateString("ja-JP", { timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit" });
-
-/* ===== サイズ & スタイル適用 ===== */
+/* ======== DOM ======== */
+const head = document.getElementById("head");
 const frame = document.getElementById("frame");
 const img = document.getElementById("img");
-const cap = document.getElementById("cap");
 const href = document.getElementById("href");
+const cap = document.getElementById("cap");
+const verEl = document.getElementById("ver");
 
+/* ヘッダー/バージョン制御 */
+if (!SHOW_HEADER) { head.style.display = "none"; verEl.style.display = "none"; }
+document.getElementById("date").textContent =
+  new Date().toLocaleDateString("ja-JP", { timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit" });
+verEl.textContent = "ver " + APP_VERSION;
+
+/* サイズ・スタイル適用 */
 if (/^\d+(\.\d+)?$/.test(WQ)) { frame.style.width = WQ + "px"; } else { frame.style.width = WQ; }
 img.style.height = HQ + "px";
 img.style.objectFit = (FIT === "contain") ? "contain" : "cover";
 img.style.borderRadius = RADIUS + "px";
-frame.style.position = "relative";
 if (BORDER) img.style.border = BORDER;
 if (!SHADOW) img.style.boxShadow = "none";
 
-/* ===== 取得ロジック ===== */
+/* ======== 取得ロジック ======== */
 function todaySeed(tz) {
   const d = new Date(new Date().toLocaleString("en-US",{ timeZone: tz }));
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), dd = String(d.getDate()).padStart(2,"0");
   return `${y}${m}${dd}`;
 }
 
-/* Bing: 今日の壁紙（JSON → 画像URL） */
+/* Bing: 今日の壁紙 */
 async function fetchBing() {
   const api = `https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=${encodeURIComponent(MKT)}`;
   const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(api)}`;
@@ -115,47 +133,97 @@ async function fetchBing() {
   return { url, page: "https://www.bing.com", title, credit: copy || "Bing" };
 }
 
-/* Unsplash: テーマ画像（ランダムだが日替わりになるようsigで固定） */
+/* Unsplash: テーマ画像（日替わり） */
 function buildUnsplashUrl(q, w, h, seed) {
   const kw = (q || "landscape").split(",").map(s=>s.trim()).filter(Boolean).join(",");
-  // サイズ指定（帯域節約）。w,hがpx数値のときのみ指定
-  const dims = (/^\d+$/g.test(String(w)) && /^\d+$/g.test(String(h))) ? `/${w}x${h}` : "";
-  // featured にクエリを付けてランダム。sig=種で日替わり固定
+  const dims = (/^\d+$/.test(String(w)) && /^\d+$/.test(String(h))) ? `/${w}x${h}` : "";
   return `https://source.unsplash.com/featured${dims}/?${encodeURIComponent(kw)}&sig=${encodeURIComponent(seed)}`;
+}
+/* 画像プロキシ（weserv） */
+function proxyUrl(u, w, h, fit) {
+  const naked = u.replace(/^https?:\/\//, "");
+  const ps = [`url=${encodeURIComponent(naked)}`];
+  if (/^\d+$/.test(String(w))) ps.push(`w=${w}`);
+  if (/^\d+$/.test(String(h))) ps.push(`h=${h}`);
+  if (fit === "cover" || fit === "contain") ps.push(`fit=${fit}`);
+  // we=1: WebP等の最適化（対応ブラウザで有効）
+  ps.push("we=1");
+  return `https://images.weserv.nl/?${ps.join("&")}`;
 }
 async function fetchUnsplash() {
   const seed = todaySeed(TZ);
-  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : null;
-  const url = buildUnsplashUrl(Q, wnum || 1200, HQ, seed);
-  return { url, page: `https://unsplash.com/s/photos/${encodeURIComponent(Q || "landscape")}`, title: Q ? `テーマ: ${Q}` : "Unsplash featured", credit: "Unsplash" };
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const direct = buildUnsplashUrl(Q, wnum, HQ, seed);
+  const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct;
+  return {
+    url,
+    page: `https://unsplash.com/s/photos/${encodeURIComponent(Q || "landscape")}`,
+    title: Q ? `テーマ: ${Q}` : "Unsplash featured",
+    credit: "Unsplash"
+  };
 }
 
-/* 入口（auto判定） */
+/* 画像読込 with タイムアウト＆フォールバック */
+function loadImageWithTimeout(src, timeoutMs = 6000) {
+  return new Promise((resolve, reject)=>{
+    let done = false;
+    const i = new Image();
+    const timer = setTimeout(()=>{ if (!done){ done = true; reject(new Error("Image load timeout")); } }, timeoutMs);
+    i.onload = ()=>{ if (!done){ done = true; clearTimeout(timer); resolve(); } };
+    i.onerror = e => { if (!done){ done = true; clearTimeout(timer); reject(new Error("Image load error")); } };
+    i.referrerPolicy = (src.includes("bing.com")) ? "no-referrer" : ""; // Unsplashにはreferrer付ける（空=ブラウザ既定）
+    i.src = src;
+  });
+}
+
 async function resolveImage() {
-  try {
-    if (SOURCE === "bing") return await fetchBing();
-    if (SOURCE === "unsplash") return await fetchUnsplash();
-    // auto：qがあればUnsplash、無ければBing
-    if (Q) return await fetchUnsplash();
-    return await fetchBing();
-  } catch (e) {
-    console.warn("Primary source failed, fallback:", e);
-    // フォールバック：常にUnsplash
-    return await fetchUnsplash();
+  // 優先：指定 source、auto は q 有り→Unsplash / 無し→Bing
+  const preferUnsplash = SOURCE === "unsplash" || (SOURCE === "auto" && Q);
+  if (preferUnsplash) {
+    try {
+      const u = await fetchUnsplash();
+      await loadImageWithTimeout(u.url);
+      return u; // 成功
+    } catch (e) {
+      console.warn("Unsplash failed, fallback to Bing:", e);
+      // フォールバック
+      const b = await fetchBing();
+      await loadImageWithTimeout(b.url);
+      return b;
+    }
+  } else {
+    try {
+      const b = await fetchBing();
+      await loadImageWithTimeout(b.url);
+      return b;
+    } catch (e) {
+      console.warn("Bing failed, fallback to Unsplash:", e);
+      const u = await fetchUnsplash();
+      await loadImageWithTimeout(u.url);
+      return u;
+    }
   }
 }
 
-/* 表示 */
+/* ======== 表示 ======== */
 (async () => {
   try {
     const { url, page, title, credit } = await resolveImage();
-    img.onload = () => { img.classList.remove("ph"); }; // ロード後にプレースホルダー印象を消す
+    img.onload = () => img.classList.remove("ph");
+    // Unsplash直リンク時は referrer を既定に（no-referrer だと拒否される環境がある）
+    img.referrerPolicy = (url.includes("bing.com")) ? "no-referrer" : "";
     img.src = url;
     href.href = page || url;
-    cap.style.display = CAPTION ? "" : "none";
-    cap.textContent = CAPTION ? (title ? `${title} — ${credit}` : credit) : "";
+
+    if (CAPTION) {
+      cap.style.display = "";
+      cap.textContent = title ? `${title} — ${credit}` : credit;
+    } else {
+      cap.style.display = "none";
+    }
   } catch (e) {
     console.error(e);
+    cap.style.display = "";
     cap.textContent = "画像を取得できませんでした。";
   }
 })();
