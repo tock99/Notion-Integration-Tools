@@ -9,7 +9,8 @@
   .head h2 { margin: 12px 0; font-weight: 600; }
   .head button { font-size: 14px; padding: 6px 10px; cursor: pointer; }
   #msg { font-size: 12px; opacity: .7; margin: 6px 0 10px; }
-  canvas { width: 100%; height: 280px; } /* 2/3 高さ */
+  /* 固定高さ（約2/3）。横は親幅に合わせるが、描画解像度はJSで固定 */
+  canvas { width: 100%; height: 280px; display:block; }
 </style>
 
 <div class="wrap">
@@ -21,19 +22,19 @@
   <canvas id="chart"></canvas>
 </div>
 
-<!-- Google Identity Services（クライアントモードで使用） -->
+<!-- （クライアントモード用）Google Identity Services -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<!-- Chart.js + Annotation -->
+<!-- Chart.js + annotation（線だけ使う） -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
 
 <script>
-  /* ===== 設定（ここだけ変えればOK） ===== */
-  const APP_VERSION = "0.01"; // ← バージョン表記
+  /* ===== ここだけ変えればOK（バージョン表記） ===== */
+  const APP_VERSION = "0.02";
 
   /* ===== クエリ取得 ===== */
   const qs = new URLSearchParams(location.search);
-  const endpoint = qs.get("endpoint");            // Apps Script 等のサーバーJSON (Notion推奨)
+  const endpoint = qs.get("endpoint");            // Apps Script 等のJSONエンドポイント（Notion推奨）
   const clientId = qs.get("client_id") || "";     // クライアントOAuth用（単体タブ推奨）
   const days = Math.max(7, Math.min(3650, Number(qs.get("days") || 90)));
   const tz = qs.get("tz") || "Asia/Tokyo";
@@ -44,20 +45,32 @@
   const titleEl = document.getElementById("title");
   const msg = document.getElementById("msg");
   const signInBtn = document.getElementById("signIn");
-  const ctx = document.getElementById("chart");
+  const canvas = document.getElementById("chart");
+  const ctx2d = canvas.getContext("2d");
   const log = (t)=> (msg.textContent = t);
 
-  // タイトルにバージョンを反映
+  // タイトルにバージョン
   titleEl.textContent = `Google Fit – Weight (ver: ${APP_VERSION})`;
 
+  // Chart.js 全体デフォルトを抑制（レスポンシブ無効 / DPR固定）
+  Chart.defaults.responsive = false;
+  Chart.defaults.devicePixelRatio = 1;
   Chart.register(window['chartjs-plugin-annotation']);
 
-  /* ===== 共通: 軸レンジ/描画 ===== */
+  /* ===== キャンバスの物理解像度を一度だけ固定 ===== */
+  function fixCanvasPixelSize() {
+    // 親のCSSレイアウト幅を取得して、その時点の幅で固定
+    const cssWidth = Math.max(320, Math.floor(canvas.getBoundingClientRect().width));
+    canvas.width = cssWidth;   // 物理解像度（px）
+    canvas.height = 280;       // 物理解像度（px）CSS高さと一致
+  }
+
+  /* ===== Y軸レンジ（仕様） ===== */
   function yRangeFrom(valuesKg, goalKg){
     const nums = valuesKg.filter(v => Number.isFinite(v));
     if (!nums.length){
       if (Number.isFinite(goalKg)) return { min: goalKg - 1, max: goalKg + 1 };
-      return {};
+      return {}; // データゼロなら自動に任せる
     }
     const minVal = Math.min(...nums), maxVal = Math.max(...nums);
     const min = Number.isFinite(goalKg) ? (goalKg - 1) : (minVal - 1);
@@ -65,40 +78,40 @@
     return { min, max };
   }
 
+  /* ===== 描画 ===== */
   let chart = null;
   function renderChart(labels, labelsFull, valuesKg){
     const range = yRangeFrom(valuesKg, goalKg);
-    if (chart) chart.destroy();
-    chart = new Chart(ctx, {
+
+    if (chart) { chart.destroy(); chart = null; }
+    chart = new Chart(ctx2d, {
       type: "line",
       data: {
         labels,
         datasets: [{
           data: valuesKg,
-          spanGaps: true,       // 欠測でも線で結ぶ
+          spanGaps: true,    // 欠測でも線で結ぶ
           pointRadius: 2,
           borderWidth: 2,
           tension: 0.2
         }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        // レイアウトを安定化：リサイズ監視・イベント・アニメーションを切る
+        responsive: false,
         animation: false,
+        events: [],                 // ← マウス/タッチイベントを完全無効化
+        maintainAspectRatio: false, // 高さは固定（CSS/属性）
         plugins: {
           legend: { display: false },
-          tooltip: { enabled: false },  // ← ツールチップ無効化（スクロール抑止）
+          tooltip: { enabled: false },
           annotation: Number.isFinite(goalKg) ? {
             annotations: {
               goalLine: {
                 type: 'line',
                 yMin: goalKg, yMax: goalKg,
-                borderColor: 'red', borderWidth: 2, borderDash: [6,4],
-                label: {
-                  enabled: true, content: `Goal ${goalKg} kg`,
-                  color: 'red', position: 'end',
-                  backgroundColor: 'rgba(229,57,53,0.08)', font: { weight: '600' }
-                }
+                borderColor: 'red', borderWidth: 2, borderDash: [6,4]
+                // ラベルは外して最小限に（再フロー要因を減らす）
               }
             }
           } : {}
@@ -111,7 +124,7 @@
     });
   }
 
-  /* ===== サーバーモード（Notion向け） ===== */
+  /* ===== データ取得（サーバーモード） ===== */
   async function fetchFromEndpoint(){
     const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}days=${encodeURIComponent(days)}`;
     const r = await fetch(url, { cache: "no-store" });
@@ -119,7 +132,7 @@
     const j = await r.json(); // { points: [{t,kg}, ...] }
 
     const fmtMMDD = (ms)=>{
-      const d = new Date(ms), o = { month: "2-digit", day: "2-digit" };
+      const d = new Date(ms), o = { month:"2-digit", day:"2-digit" };
       return (tz && tz !== "system") ? d.toLocaleDateString("ja-JP", { timeZone: tz, ...o })
                                      : d.toLocaleDateString("ja-JP", o);
     };
@@ -129,13 +142,13 @@
                                      : d.toLocaleDateString("ja-JP", o);
     };
 
-    const labels = j.points.map(p => fmtMMDD(p.t));       // 表示は MM/DD
+    const labels = j.points.map(p => fmtMMDD(p.t));        // X軸は MM/DD 表示
     const labelsFull = j.points.map(p => fmtYYYYMMDD(p.t)); // 予備（今は未使用）
     const valuesKg = j.points.map(p => p.kg);
     return { labels, labelsFull, valuesKg };
   }
 
-  /* ===== クライアントモード（単体タブ推奨） ===== */
+  /* ===== クライアントモード（参考：Notionでは推奨しない） ===== */
   const SCOPES = "https://www.googleapis.com/auth/fitness.body.read";
   let accessToken = null, tokenClient = null;
 
@@ -197,6 +210,9 @@
   /* ===== 実行 ===== */
   async function run(){
     try{
+      // 1) 先にキャンバスの物理解像度を確定 → 2) 描画
+      fixCanvasPixelSize();
+
       log("Loading…");
       if (endpoint){
         signInBtn.style.display = "none"; // サーバーモードはボタン不要
@@ -215,8 +231,8 @@
     }
   }
 
-  // アクセス時に自動実行
+  // アクセス時に自動実行（リサイズ監視は一切しない）
   window.addEventListener("load", run);
-  // 手動実行も一応残す
+  // 任意で手動実行も残す
   signInBtn.onclick = run;
 </script>
