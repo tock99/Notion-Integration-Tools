@@ -60,10 +60,10 @@
 
 <script>
 /* ========= バージョン ========= */
-const DEFAULT_APP_VERSION = "0.10";
+const DEFAULT_APP_VERSION = "0.11";
 
 /* ========= クエリ =========
-   source: auto|bing|unsplash|wikimedia|nasa|picsum|anime|waifu|neko|waifuim
+   source: auto|bing|unsplash|wikimedia|commons|nasa|picsum|anime|waifu|neko|waifuim
    q: テーマ語 / 人名 / 競技名など
    cat: landscape|space|science|sports（カテゴリで優先ルートを切替）
    atag: アニメ用タグ（waifu, maid, neko など）
@@ -84,7 +84,7 @@ const SIZING = (qs.get("sizing") || "canvas").toLowerCase();
 const WQ = qs.get("w") || "100%";
 const HQ = Math.max(120, Number(qs.get("h") || 300));
 const FIT = (qs.get("fit") || "cover");
-const PERSIST = (qs.get("persist") || "day").toLowerCase(); // day|session|none
+const PERSIST = (qs.get("persist") || "day").toLowerCase();
 const RADIUS = Number(qs.get("radius") || 12);
 const SHADOW = qs.get("shadow") !== "0";
 const BORDER = qs.get("border") || "";
@@ -164,7 +164,7 @@ function hash32(str){
 }
 function rngFromSeed(seedStr){
   let x = (hash32(seedStr) || 123456789) >>> 0;
-  return function(){ // xorshift32
+  return function(){
     x ^= x << 13; x >>>= 0;
     x ^= x << 17; x >>>= 0;
     x ^= x << 5;  x >>>= 0;
@@ -260,7 +260,7 @@ async function fetchUnsplash() {
   return { url, page: `https://unsplash.com/s/photos/${encodeURIComponent(Q || "landscape")}`, title: Q ? `テーマ: ${Q}` : "Unsplash featured", credit: "Unsplash", _wnum: wnum, _direct: direct };
 }
 async function fetchWikimedia() {
-  log("source: Wikimedia");
+  log("source: Wikimedia POTD");
   const p = todayParts(TZ);
   const api = `https://en.wikipedia.org/api/rest_v1/feed/featured/${p.y}/${p.m}/${p.d}`;
   const r = await fetch(api, { cache: "no-store" });
@@ -316,7 +316,6 @@ async function fetchWikimediaSearch(query) {
   const j = JSON.parse(text);
   const pages = j?.query?.pages ? Object.values(j.query.pages) : [];
   if (!pages.length) throw new Error("Commons search: no results");
-  // 日付+条件で決定的に選ぶ
   const seedStr = todaySeed(TZ) + "|" + query + "|" + MKT;
   const it = pickDeterministic(pages, seedStr);
   const ii = it?.imageinfo?.[0];
@@ -438,19 +437,24 @@ async function resolveImage() {
       order.push(Q ? fetchUnsplash : fetchBing, fetchWikimedia, Q ? fetchBing : fetchUnsplash, fetchPicsum, fetchNasa, fetchAnime);
     }
   } else {
-    const map = {
-      bing: fetchBing, unsplash: fetchUnsplash, wikimedia: fetchWikimedia,
-      nasa: fetchNasa, picsum: fetchPicsum,
-      anime: fetchAnime, waifu: fetchWaifuPics, neko: fetchNekosBest, waifuim: fetchWaifuIm
-    };
-    if (!map[SOURCE]) throw new Error("Unknown source: " + SOURCE);
-    order.push(map[SOURCE], fetchBing, fetchUnsplash, fetchPicsum, fetchNasa);
+    // 明示指定：フォールバックしない
+    if (SOURCE === "wikimedia") {
+      order.push(Q ? (() => fetchWikimediaSearch(Q)) : fetchWikimedia);  // qがあれば検索、なければPOTD
+    } else if (SOURCE === "commons") {
+      order.push(() => fetchWikimediaSearch(Q || "landscape")); // 常に検索
+    } else {
+      const map = {
+        bing: fetchBing, unsplash: fetchUnsplash, nasa: fetchNasa, picsum: fetchPicsum,
+        anime: fetchAnime, waifu: fetchWaifuPics, neko: fetchNekosBest, waifuim: fetchWaifuIm
+      };
+      if (!map[SOURCE]) throw new Error("Unknown source: " + SOURCE);
+      order.push(map[SOURCE]);
+    }
   }
 
   for (const fn of order) {
     try {
       const r = await fn();
-      // ロード or プロキシ
       let finalUrl = r.url;
       const wnum = r._wnum;
       try {
@@ -468,7 +472,7 @@ async function resolveImage() {
   throw new Error("All sources failed");
 }
 
-/* ========= 日替わり/セッション キャッシュ ========= */
+/* ========= キャッシュ ========= */
 function cacheKey(kind){
   const base = [
     "todayshot",
