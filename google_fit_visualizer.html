@@ -36,7 +36,7 @@
 
 <script>
   /* ===== バージョン表記（右上に極小表示） ===== */
-  const DEFAULT_APP_VERSION = "0.07";
+  const DEFAULT_APP_VERSION = "0.08";
 
   /* ===== クエリ ===== */
   const qs = new URLSearchParams(location.search);
@@ -155,17 +155,27 @@
   };
   Chart.register(todayTickPlugin);
 
-  /* ===== ツールチップ：日付/時刻/体重の3行フォーマット ===== */
-  function fmtDateTime(ms, tz){
-    const base = tz && tz !== "system" ? { timeZone: tz } : {};
-    const d = new Date(ms);
-    const y = d.toLocaleString("ja-JP", { ...base, year: "numeric" });
-    const m = d.toLocaleString("ja-JP", { ...base, month: "2-digit" });
-    const day = d.toLocaleString("ja-JP", { ...base, day: "2-digit" });
-    const hh = d.toLocaleString("ja-JP", { ...base, hour: "2-digit", hour12: false });
-    const mm = d.toLocaleString("ja-JP", { ...base, minute: "2-digit" });
-    const ss = d.toLocaleString("ja-JP", { ...base, second: "2-digit" });
-    return { dateStr: `${y}/${m}/${day}`, timeStr: `${hh}:${mm}:${ss}` };
+  /* ===== ツールチップ：日付/時刻/体重の3行フォーマット（単位文字を出さない版） ===== */
+  function fmtDateTime(ms, tz) {
+    const opts = {
+      timeZone: (tz && tz !== "system") ? tz : undefined,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false
+    };
+    // 各パーツを numbers のみで取得（"年" "時" などの単位は literal に入る）
+    const parts = new Intl.DateTimeFormat("ja-JP", opts).formatToParts(new Date(ms));
+    const get = (type) => parts.find(p => p.type === type)?.value ?? "";
+    const yyyy = get("year");
+    const mm   = get("month");
+    const dd   = get("day");
+    const hh   = get("hour");
+    const mi   = get("minute");
+    const ss   = get("second");
+    return {
+      dateStr: `${yyyy}/${mm}/${dd}`,      // YYYY/MM/DD
+      timeStr: `${hh}:${mi}:${ss}`         // hh:mm:ss（24時間表記）
+    };
   }
 
   /* ===== 描画 ===== */
