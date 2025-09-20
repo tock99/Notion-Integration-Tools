@@ -99,7 +99,7 @@
   else if (activeCount === 2) layout.classList.add("cols-2");
 
   // カラム+30px幅増し（以前の仕様）
-  const baseWidth = 1320;
+  const baseWidth = 1350;
   shell.style.maxWidth = `calc(${baseWidth}px + ${activeCount*30}px)`;
 
   const qiitaDOM  = wantQiita  ? makePanel("Qiita", "--qiita")          : null;
