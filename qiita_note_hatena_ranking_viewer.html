@@ -6,8 +6,13 @@
   :root{
     --qiita:#55C500; --note:#41C9B4; --hatena:#008FDE;
     --ink:#111; --muted:#666; --bg:#fff; --chip:#f4f8ef; --border:#e6f3d8; --card:#fff; --err:#b00020;
+    --title-fs:14px; --title-lh:1.4; --badge-fs:11px; --badge-lh:1.2;
   }
   html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Sans","Noto Sans JP",sans-serif}
+  /* ページのスクロールバーを非表示（スクロール自体は可能） */
+  body{-ms-overflow-style:none; scrollbar-width:none;}
+  body::-webkit-scrollbar{display:none;}
+
   .shell{max-width:1200px;margin:0 auto;padding:12px}
   .grid{display:grid;gap:12px}
   @media (min-width: 880px){ .grid.cols-2{grid-template-columns:1fr 1fr} }
@@ -29,18 +34,26 @@
   ol.list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px}
   .item a{
     display:flex;gap:10px;text-decoration:none;color:inherit;
-    border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fff
+    border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fff;
+    /* ▼ 縦幅を固定（タイトル2行 + バッジ1行 + 余白を想定） */
+    min-height: calc((var(--title-fs) * var(--title-lh) * 2) + (var(--badge-fs) * var(--badge-lh)) + 0px);
   }
   .rank{width:24px;min-width:24px;height:24px;display:grid;place-items:center;border-radius:6px;background:var(--chip);font-weight:700;font-size:12px}
 
-  /* タイトル：常に2行に収め、超えたら省略 */
+  /* タイトル：常に2行に固定し、はみ出しは省略。タイトルだけホバーで下線 */
   .title{
-    font-weight:600;font-size:14px;line-height:1.4;
+    font-weight:600;font-size:var(--title-fs);line-height:var(--title-lh);
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
-    overflow:hidden;max-height:calc(1.4em * 2);
+    overflow:hidden;height:calc(var(--title-fs) * var(--title-lh) * 2);
   }
-  /* バッジは小さめ（縦の揃え用） */
-  .badges{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted)}
+  .title:hover{text-decoration:underline}
+
+  /* バッジは1行で省略（高さを揃える） */
+  .badges{
+    margin-top:4px;display:flex;flex-wrap:nowrap;gap:6px;
+    font-size:var(--badge-fs);line-height:var(--badge-lh);color:var(--muted);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
   .chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:999px;background:var(--chip);border:1px solid var(--border)}
   .chip svg{width:12px;height:12px}
 
@@ -70,10 +83,9 @@
   const QIITA_FEED = "https://qiita.com/popular-items/feed.atom";
   const QIITA_ITEM_API = id => `https://qiita.com/api/v2/items/${encodeURIComponent(id)}`;
 
-  // はてブ（直URL2種）
+  // はてブ（注目 / IT）
   const HATENA_RSS_1 = "https://b.hatena.ne.jp/hotentry.rss";
   const HATENA_RSS_2 = "https://b.hatena.ne.jp/hotentry?mode=rss";
-  // ITカテゴリ
   const HATENA_IT_1  = "https://b.hatena.ne.jp/hotentry/it.rss";
   const HATENA_IT_2  = "https://b.hatena.ne.jp/hotentry/it?mode=rss";
 
@@ -96,13 +108,13 @@
   if (activeCount === 3) layout.classList.add("cols-3");
   else if (activeCount === 2) layout.classList.add("cols-2");
 
-  // ★ 各カラムを +30px 広げる： shell の max-width を列数×30px 広げる
-  const baseWidth = 1200; // CSSの .shell max-width と一致
+  /* 各カラム +30px： shell の max-width を列数×30px 広げる */
+  const baseWidth = 1200;
   shell.style.maxWidth = `calc(${baseWidth}px + ${activeCount*30}px)`;
 
   const qiitaDOM  = wantQiita  ? makePanel("Qiita", "--qiita")          : null;
   const noteDOM   = wantNote   ? makePanel("note", "--note")            : null;
-  const hatenaDOM = wantHatena ? makePanel("はてな", "--hatena", true)  : null; // タイトルを「はてな」に省略
+  const hatenaDOM = wantHatena ? makePanel("はてな", "--hatena", true)  : null;
   if (qiitaDOM)  layout.appendChild(qiitaDOM.wrap);
   if (noteDOM)   layout.appendChild(noteDOM.wrap);
   if (hatenaDOM) layout.appendChild(hatenaDOM.wrap);
@@ -111,7 +123,7 @@
   if (qiitaDOM)  runQiita(qiitaDOM).catch(()=>{});
   if (noteDOM)   runNoteToday(noteDOM).catch(()=>{});
   if (hatenaDOM){
-    setupHatenaControls(hatenaDOM);        // 右上トグル
+    setupHatenaControls(hatenaDOM);
     runHatena(hatenaDOM, HATENA_CAT).catch(()=>{});
   }
 
@@ -149,7 +161,7 @@
   function pad2(n){ return n<10 ? "0"+n : ""+n; }
   function fmtMDHM(input){
     const d = (input instanceof Date) ? input : new Date(input);
-    if (isNaN(d.getTime())) return ""; // パース不可は空文字（→呼び出し側で「取得不可」）
+    if (isNaN(d.getTime())) return ""; // パース不可は空 → 呼び出し側で「取得不可」
     return `${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   }
   function addRow(listEl, rank, href, title, likeText, tagText, brandColor){
@@ -364,7 +376,7 @@
     if (DEBUG) dom.debug.textContent = dbg.join("\n");
   }
 
-  /* ===== はてなブックマーク（カテゴリ切替 + 日付フォールバック） ===== */
+  /* ===== はてな（トグル + 日付フォールバック） ===== */
   function parseHatenaRSS(xml){
     const doc = new DOMParser().parseFromString(xml,"application/xml");
     const NS_HATENA = "http://www.hatena.ne.jp/info/xmlns#";
@@ -481,7 +493,7 @@
     if (DEBUG) dom.debug.textContent = dbg.join("\n");
   }
 
-  /* ===== はてな：右上トグル（小さめ・ヘッダと同じ縦幅） ===== */
+  /* ===== はてな：右上トグル（小型） ===== */
   function setupHatenaControls(dom){
     const ctrls = dom.ctrls;
     if (!ctrls) return;
