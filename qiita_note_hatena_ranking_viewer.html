@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Qiita / note / はてなブックマーク トレンド</title>
+<title>Qiita / note / はてな トレンド</title>
 <style>
   :root{
     --qiita:#55C500; --note:#41C9B4; --hatena:#008FDE;
@@ -14,9 +14,17 @@
   @media (min-width: 1080px){ .grid.cols-3{grid-template-columns:1fr 1fr 1fr} }
 
   .panel{border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card)}
-  .head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .head .spacer{flex:1}
   .head h3{margin:0;font-size:16px;font-weight:700}
   .meta{font-size:12px;color:var(--muted)}
+  .ctrls{display:flex;gap:6px}
+  .btn{
+    font-size:10px; height:20px; line-height:18px; padding:0 8px;
+    border:1px solid var(--border); border-radius:999px; background:#fff; cursor:pointer; color:inherit;
+  }
+  .btn:hover{filter:brightness(0.98)}
+  .btn.active{background:var(--chip);}
 
   ol.list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px}
   .item a{
@@ -25,7 +33,7 @@
   }
   .rank{width:24px;min-width:24px;height:24px;display:grid;place-items:center;border-radius:6px;background:var(--chip);font-weight:700;font-size:12px}
 
-  /* タイトル：常に2行、省略 */
+  /* タイトル：常に2行に収め、超えたら省略 */
   .title{
     font-weight:600;font-size:14px;line-height:1.4;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
@@ -41,7 +49,7 @@
   .debug{margin-top:8px;font-size:11px;color:#888;white-space:pre-wrap}
 </style>
 
-<div class="shell">
+<div class="shell" id="shell">
   <div id="layout" class="grid"></div>
 </div>
 
@@ -56,6 +64,7 @@
 
   const NOTE_SOURCE = (q.get("note_source") || "json").toLowerCase(); // json|html
   const HATENA_MODE = (q.get("hatena_mode") || "auto").toLowerCase(); // auto|proxy|direct
+  const HATENA_CAT  = (q.get("hatena_cat")  || "general").toLowerCase(); // general|it（初期表示）
 
   // Qiita
   const QIITA_FEED = "https://qiita.com/popular-items/feed.atom";
@@ -64,17 +73,21 @@
   // はてブ（直URL2種）
   const HATENA_RSS_1 = "https://b.hatena.ne.jp/hotentry.rss";
   const HATENA_RSS_2 = "https://b.hatena.ne.jp/hotentry?mode=rss";
+  // ITカテゴリ
+  const HATENA_IT_1  = "https://b.hatena.ne.jp/hotentry/it.rss";
+  const HATENA_IT_2  = "https://b.hatena.ne.jp/hotentry/it?mode=rss";
 
   // note Worker endpoints
   const NOTE_TODAY_JSON = (max) => `${PROXY_BASE}/note/today.json?max=${encodeURIComponent(max)}`;
   const NOTE_TODAY_HTML = (max) => `${PROXY_BASE}/note/today.html?max=${encodeURIComponent(max)}`;
 
-  // note 直接スクレイプ用
+  // note 直接スクレイプ
   const NOTE_TODAY_URL = "https://note.com/today";
   const NOTE_DETAIL_API = key => `https://note.com/api/v3/notes/${encodeURIComponent(key)}`;
 
   /* ===== 1) Layout ===== */
   const layout = document.getElementById("layout");
+  const shell  = document.getElementById("shell");
   const wantQiita  = SOURCE === "all" || SOURCE === "qiita";
   const wantNote   = SOURCE === "all" || SOURCE === "note";
   const wantHatena = SOURCE === "all" || SOURCE === "hatena";
@@ -83,9 +96,13 @@
   if (activeCount === 3) layout.classList.add("cols-3");
   else if (activeCount === 2) layout.classList.add("cols-2");
 
-  const qiitaDOM  = wantQiita  ? makePanel("Qiita トレンド", "--qiita")          : null;
-  const noteDOM   = wantNote   ? makePanel("note 今日の注目", "--note")          : null;
-  const hatenaDOM = wantHatena ? makePanel("はてなブックマーク 注目", "--hatena") : null;
+  // ★ 各カラムを +30px 広げる： shell の max-width を列数×30px 広げる
+  const baseWidth = 1200; // CSSの .shell max-width と一致
+  shell.style.maxWidth = `calc(${baseWidth}px + ${activeCount*30}px)`;
+
+  const qiitaDOM  = wantQiita  ? makePanel("Qiita", "--qiita")          : null;
+  const noteDOM   = wantNote   ? makePanel("note", "--note")            : null;
+  const hatenaDOM = wantHatena ? makePanel("はてな", "--hatena", true)  : null; // タイトルを「はてな」に省略
   if (qiitaDOM)  layout.appendChild(qiitaDOM.wrap);
   if (noteDOM)   layout.appendChild(noteDOM.wrap);
   if (hatenaDOM) layout.appendChild(hatenaDOM.wrap);
@@ -93,10 +110,13 @@
   /* ===== 2) Run ===== */
   if (qiitaDOM)  runQiita(qiitaDOM).catch(()=>{});
   if (noteDOM)   runNoteToday(noteDOM).catch(()=>{});
-  if (hatenaDOM) runHatena(hatenaDOM).catch(()=>{});
+  if (hatenaDOM){
+    setupHatenaControls(hatenaDOM);        // 右上トグル
+    runHatena(hatenaDOM, HATENA_CAT).catch(()=>{});
+  }
 
   /* ===== helpers: UI/NET ===== */
-  function makePanel(title, brandVar){
+  function makePanel(title, brandVar, withCtrls=false){
     const wrap = document.createElement("div");
     wrap.className = "col";
     wrap.innerHTML = `
@@ -104,6 +124,8 @@
         <div class="head">
           <h3 style="color:${css(brandVar)}">${title}</h3>
           <div class="meta">更新情報を取得中…</div>
+          <div class="spacer"></div>
+          <div class="ctrls" style="display:${withCtrls?'flex':'none'}"></div>
         </div>
         <ol class="list"></ol>
         <div class="status">読み込み中…</div>
@@ -116,13 +138,20 @@
       list: wrap.querySelector(".list"),
       status: wrap.querySelector(".status"),
       debug: wrap.querySelector(".debug"),
+      ctrls: wrap.querySelector(".ctrls"),
       brand: css(brandVar)
     };
   }
   function css(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function heart(){ return `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 21s-7.2-4.35-9.6-8.7C.6 8.9 2.2 5 6 5c2.1 0 3.4 1.2 4 2 0.6-0.8 1.9-2 4-2 3.8 0 5.4 3.9 3.6 7.3C19.2 16.65 12 21 12 21z"/></svg>`; }
   function tagIcon(){ return `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M10.59 2L3 9.59V21h11.41L22 13.41V2H10.59zM7 12a2 2 0 110-4 2 2 0 010 4z"/></svg>`; }
-  function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&gt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function pad2(n){ return n<10 ? "0"+n : ""+n; }
+  function fmtMDHM(input){
+    const d = (input instanceof Date) ? input : new Date(input);
+    if (isNaN(d.getTime())) return ""; // パース不可は空文字（→呼び出し側で「取得不可」）
+    return `${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
   function addRow(listEl, rank, href, title, likeText, tagText, brandColor){
     const li = document.createElement("li");
     li.className = "item";
@@ -174,7 +203,7 @@
       const xml = await feed.text();
       const {feedUpdated, entries} = parseQiitaAtom(xml);
       dom.meta.textContent = feedUpdated
-        ? "RSS更新: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date(feedUpdated))
+        ? "RSS更新: " + fmtMDHM(feedUpdated)
         : "RSS更新: 取得不可";
 
       dom.list.innerHTML=""; dom.status.textContent="記事詳細を取得中…";
@@ -203,9 +232,7 @@
     if (DEBUG) dom.debug.textContent = dbg.join("\n");
   }
 
-  /* ===== note 今日の注目（Worker + 自動フォールバック） ===== */
-
-  // Worker JSON/HTML → items 取得（失敗/空のときは null を返す）
+  /* ===== note 今日の注目（Worker + フォールバック） ===== */
   async function noteFromWorkerJSON(max, dbg){
     try{
       const r = await fetch(NOTE_TODAY_JSON(max), { headers: { "Accept": "application/json" } });
@@ -248,12 +275,11 @@
     }catch(e){ dbg.push(`note html err: ${String(e)}`); return null; }
   }
 
-  // 直接スクレイプ（/today を proxy 経由で取得 → key 抽出 → notes API 詳細）
   function extractPairsFromHtml(html, limit=60){
     const out=[], seen=new Set(); let m;
     const reHref=/href="\/([^"\/@]+)\/n\/([a-z0-9]{8,})"/ig;
     while((m=reHref.exec(html))!==null){ const urlname=m[1], key=m[2]; if(!seen.has(key)){seen.add(key); out.push({urlname,key}); if(out.length>=limit) break;} }
-    if(out.length<5){ // バックアップ
+    if(out.length<5){
       const reKey=/"key"\s*:\s*"([a-z0-9]+)"/ig;
       while((m=reKey.exec(html))!==null){ const key=m[1]; if(!seen.has(key)){seen.add(key); out.push({urlname:"",key}); if(out.length>=limit) break;} }
     }
@@ -300,10 +326,10 @@
         if (DEBUG) dom.debug.textContent = "note today needs proxy_base";
         return;
       }
-      dom.meta.textContent = "取得: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date());
+      dom.meta.textContent = "取得: " + fmtMDHM(new Date());
       dom.list.innerHTML=""; dom.status.textContent="記事を収集中…";
 
-      // 1) Worker 優先（json/html 指定）
+      // 1) Worker 優先
       let items = NOTE_SOURCE==="json"
         ? await noteFromWorkerJSON(MAX, dbg)
         : await noteFromWorkerHTML(MAX, dbg);
@@ -314,10 +340,10 @@
           ? await noteFromWorkerHTML(MAX, dbg)
           : await noteFromWorkerJSON(MAX, dbg);
       }
-      // 3) クライアント側スクレイプ フォールバック
+      // 3) クライアント側スクレイプ
       if (!items) items = await noteFromClientScrape(MAX, dbg);
 
-      // 4) 表示
+      // 表示
       let rank=1;
       for (const it of (items||[]).slice(0,MAX)){
         const tags = it.tags || [];
@@ -338,14 +364,17 @@
     if (DEBUG) dom.debug.textContent = dbg.join("\n");
   }
 
-  /* ===== はてなブックマーク ===== */
+  /* ===== はてなブックマーク（カテゴリ切替 + 日付フォールバック） ===== */
   function parseHatenaRSS(xml){
     const doc = new DOMParser().parseFromString(xml,"application/xml");
     const NS_HATENA = "http://www.hatena.ne.jp/info/xmlns#";
     const NS_DC     = "http://purl.org/dc/elements/1.1/";
-    const lastBuild =
-      doc.querySelector("channel > lastBuildDate")?.textContent ||
-      doc.querySelector("channel > pubDate")?.textContent || "";
+
+    const ch = doc.getElementsByTagName("channel")[0];
+    let lastBuild =
+      ch?.getElementsByTagName("lastBuildDate")[0]?.textContent?.trim() ||
+      ch?.getElementsByTagName("pubDate")[0]?.textContent?.trim() || "";
+
     const items = [...doc.getElementsByTagName("item")].map(n=>{
       const title = n.getElementsByTagName("title")[0]?.textContent?.trim() || "(no title)";
       const link  = n.getElementsByTagName("link")[0]?.textContent?.trim()  || "";
@@ -362,57 +391,76 @@
       for (let i=0;i<cats.length;i++){ const t = cats[i].textContent.trim(); if (t) tags.push(t); }
       const dcSubs = n.getElementsByTagNameNS(NS_DC, "subject");
       for (let i=0;i<dcSubs.length;i++){ const t = dcSubs[i].textContent.trim(); if (t) tags.push(t); }
-      return { title, link, bookmarks: bc, tags };
+      const itemPub = n.getElementsByTagName("pubDate")[0]?.textContent?.trim() || "";
+      const itemDc  = n.getElementsByTagNameNS(NS_DC, "date")[0]?.textContent?.trim() || "";
+      return { title, link, bookmarks: bc, tags, _pub: itemPub || itemDc };
     });
+
+    if (!lastBuild) {
+      let bestTs = -1, bestRaw = "";
+      for (const it of items){
+        const ts = Date.parse(it._pub);
+        if (!Number.isNaN(ts) && ts > bestTs){ bestTs = ts; bestRaw = it._pub; }
+      }
+      if (bestRaw) lastBuild = bestRaw;
+    }
+    for (const it of items) delete it._pub;
     return { lastBuild, items };
   }
 
-  async function runHatena(dom){
+  function hatenaFeedsFor(category){
+    if (category === "it") return [HATENA_IT_1, HATENA_IT_2];
+    return [HATENA_RSS_1, HATENA_RSS_2];
+  }
+
+  async function runHatena(dom, category="general"){
     const dbg = [];
     try{
       dom.list.innerHTML="";
+      dom.status.textContent = "読み込み中…";
+      const [RSS1, RSS2] = hatenaFeedsFor(category);
+
       let xml = null;
 
-      // 1) 直取り（auto/direct のとき試す）
+      // 1) 直取り
       if (HATENA_MODE === "auto" || HATENA_MODE === "direct") {
         try {
-          const r1 = await fetch(HATENA_RSS_1, { headers: { Accept: "application/xml" } });
+          const r1 = await fetch(RSS1, { headers: { Accept: "application/xml" } });
           if (!r1.ok) throw new Error("direct #1 " + r1.status);
-          xml = await r1.text(); dbg.push("hatena direct #1 ok");
+          xml = await r1.text(); dbg.push(`hatena(${category}) direct #1 ok`);
         } catch(e1){
           try {
-            const r2 = await fetch(HATENA_RSS_2, { headers: { Accept: "application/xml" } });
+            const r2 = await fetch(RSS2, { headers: { Accept: "application/xml" } });
             if (!r2.ok) throw new Error("direct #2 " + r2.status);
-            xml = await r2.text(); dbg.push("hatena direct #2 ok");
+            xml = await r2.text(); dbg.push(`hatena(${category}) direct #2 ok`);
           } catch(e2){
-            dbg.push("hatena direct failed: " + e2);
+            dbg.push(`hatena(${category}) direct failed: ` + e2);
             if (HATENA_MODE === "direct") throw e2;
           }
         }
       }
 
-      // 2) プロキシ（auto/proxy のとき or 直が失敗）
+      // 2) プロキシ
       if (!xml && (HATENA_MODE === "auto" || HATENA_MODE === "proxy")) {
         if (!PROXY_BASE) throw new Error("proxy_base not configured for hatena");
-        let p = await proxyFetch(HATENA_RSS_1, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
-        dbg.push(`hatena proxy #1 status=${p.status}`);
+        let p = await proxyFetch(RSS1, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
+        dbg.push(`hatena(${category}) proxy #1 status=${p.status}`);
         if (!p.ok) {
-          p = await proxyFetch(HATENA_RSS_2, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
-          dbg.push(`hatena proxy #2 status=${p.status}`);
-          if (!p.ok) throw new Error(`hatena proxy failed (${p.status})`);
+          p = await proxyFetch(RSS2, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
+          dbg.push(`hatena(${category}) proxy #2 status=${p.status}`);
+          if (!p.ok) throw new Error(`hatena(${category}) proxy failed (${p.status})`);
         }
         xml = await p.text();
       }
 
       const { lastBuild, items } = parseHatenaRSS(xml);
       dom.meta.textContent = lastBuild
-        ? "RSS更新: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date(lastBuild))
+        ? "RSS更新: " + (fmtMDHM(lastBuild) || "取得不可")
         : "RSS更新: 取得不可";
-
-      dom.status.textContent="記事を整形中…";
 
       const top = items.sort((a,b)=> (b.bookmarks||0) - (a.bookmarks||0)).slice(0,MAX);
 
+      dom.list.innerHTML="";
       let rank=1;
       for (const it of top){
         const tags = it.tags || [];
@@ -428,9 +476,51 @@
     }catch(e){
       dom.status.classList.add("error");
       dom.status.textContent = "取得に失敗しました。";
-      dbg.push(`hatena error: ${String(e).slice(0,200)}`);
+      dbg.push(`hatena(${category}) error: ${String(e).slice(0,200)}`);
     }
     if (DEBUG) dom.debug.textContent = dbg.join("\n");
+  }
+
+  /* ===== はてな：右上トグル（小さめ・ヘッダと同じ縦幅） ===== */
+  function setupHatenaControls(dom){
+    const ctrls = dom.ctrls;
+    if (!ctrls) return;
+
+    const btnGeneral = document.createElement("button");
+    btnGeneral.className = "btn";
+    btnGeneral.textContent = "注目";
+    btnGeneral.style.color = css("--hatena");
+
+    const btnIT = document.createElement("button");
+    btnIT.className = "btn";
+    btnIT.textContent = "IT";
+    btnIT.style.color = css("--hatena");
+
+    ctrls.appendChild(btnGeneral);
+    ctrls.appendChild(btnIT);
+
+    let current = (HATENA_CAT === "it") ? "it" : "general";
+    setActive(current);
+
+    btnGeneral.addEventListener("click", () => {
+      if (current === "general") return;
+      current = "general";
+      setActive(current);
+      runHatena(dom, "general");
+    });
+    btnIT.addEventListener("click", () => {
+      if (current === "it") return;
+      current = "it";
+      setActive(current);
+      runHatena(dom, "it");
+    });
+
+    function setActive(cat){
+      btnGeneral.classList.toggle("active", cat==="general");
+      btnIT.classList.toggle("active", cat==="it");
+      btnGeneral.style.borderColor = (cat==="general") ? dom.brand : "var(--border)";
+      btnIT.style.borderColor      = (cat==="it")      ? dom.brand : "var(--border)";
+    }
   }
 })();
 </script>
