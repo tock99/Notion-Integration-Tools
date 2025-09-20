@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>今日の一枚</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .wrap { margin: 0; padding: 0; width: 100%; max-width: none; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .head h2 { margin: 0; font-size: 14px; font-weight: 600; opacity: .85; }
+  .head small { opacity: .6; }
+  .frame { position: relative; width: 100%; max-width: 100%; overflow: hidden; }
+  .ph {
+    width: 100%; height: 300px;
+    display: block;
+    background: linear-gradient(120deg, #eee 25%, #f7f7f7 37%, #eee 63%);
+    background-size: 400% 100%; animation: shimmer 1.3s infinite;
+    border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.12);
+    object-fit: cover; object-position: center;
+  }
+  @keyframes shimmer { 0%{background-position: 100% 0} 100%{background-position: 0 0} }
+  .cap {
+    position: absolute; bottom: 6px; left: 8px;
+    font-size: 12px; color: #fff; max-width: 88%;
+    text-shadow: 0 0 4px rgba(0,0,0,.6);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    user-select: none; pointer-events: none;
+  }
+  .ver {
+    position: absolute; bottom: 6px; right: 8px;
+    font-size: 10px; color: #fff;
+    text-shadow: 0 0 4px rgba(0,0,0,.6);
+    user-select: none; pointer-events: none;
+  }
+  .dbg {
+    position: fixed; top: 6px; left: 8px; z-index: 1000;
+    font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    background: #000a; color: #fff; padding: 4px 6px; border-radius: 6px;
+    display: none; white-space: pre-wrap; max-width: 90vw;
+  }
+  a.noline { text-decoration: none; color: inherit; display:block; position: relative; }
+</style>
+
+<div class="wrap" id="wrap">
+  <div class="head" id="head">
+    <h2>今日の一枚</h2>
+    <small id="date"></small>
+  </div>
+
+  <div class="frame" id="frame">
+    <a id="href" class="noline" target="_blank" rel="noopener noreferrer">
+      <img id="img" alt="今日の一枚" class="ph" referrerpolicy="no-referrer">
+      <div class="cap" id="cap"></div>
+      <div class="ver" id="ver"></div>
+    </a>
+  </div>
+</div>
+<div class="dbg" id="dbg"></div>
+
+<script>
+/* ========= バージョン ========= */
+const DEFAULT_APP_VERSION = "0.11";
+
+/* ========= クエリ =========
+   source: auto|bing|unsplash|wikimedia|commons|nasa|picsum|anime|waifu|neko|waifuim
+   q: テーマ語 / 人名 / 競技名など
+   cat: landscape|space|science|sports（カテゴリで優先ルートを切替）
+   atag: アニメ用タグ（waifu, maid, neko など）
+   proxy: 1/0 直リンク失敗時プロキシ再試行（既定1）
+   sizing: canvas|box（既定 canvas）
+   w,h: 表示サイズ（canvas=固定枠 / box=上限）
+   fit: cover|contain（canvas時のみ）
+   persist: day|session|none（既定 day：同日内は変わらない）
+   radius,shadow,border,caption,mkt,tz,ver,header,link,scroll,pad,margin,debug
+*/
+const qs = new URLSearchParams(location.search);
+const SOURCE = (qs.get("source") || "auto").toLowerCase();
+const Q = qs.get("q") || "";
+const CAT = (qs.get("cat") || "").toLowerCase();
+const ATAG = (qs.get("atag") || "").toLowerCase();
+const USE_PROXY = qs.get("proxy") !== "0";
+const SIZING = (qs.get("sizing") || "canvas").toLowerCase();
+const WQ = qs.get("w") || "100%";
+const HQ = Math.max(120, Number(qs.get("h") || 300));
+const FIT = (qs.get("fit") || "cover");
+const PERSIST = (qs.get("persist") || "day").toLowerCase();
+const RADIUS = Number(qs.get("radius") || 12);
+const SHADOW = qs.get("shadow") !== "0";
+const BORDER = qs.get("border") || "";
+const CAPTION = qs.get("caption") !== "0";
+const MKT = qs.get("mkt") || "ja-JP";
+const NASA_KEY = qs.get("nasa_key") || "DEMO_KEY";
+const TZ = qs.get("tz") || "Asia/Tokyo";
+const APP_VERSION = qs.get("ver") || DEFAULT_APP_VERSION;
+const SHOW_HEADER = qs.get("header") !== "0";
+const LINK_ENABLED = qs.get("link") !== "0";
+const SHOW_SCROLL = qs.get("scroll") === "1";
+const PAD = Number(qs.get("pad") ?? 0);
+const MARGIN = Number(qs.get("margin") ?? 0);
+const DEBUG = qs.get("debug") === "1";
+
+/* ========= DOM ========= */
+const wrap = document.getElementById("wrap");
+const head = document.getElementById("head");
+const frame = document.getElementById("frame");
+const href = document.getElementById("href");
+const img = document.getElementById("img");
+const cap = document.getElementById("cap");
+const verEl = document.getElementById("ver");
+const dbg = document.getElementById("dbg");
+
+/* ========= レイアウト適用 ========= */
+if (!SHOW_SCROLL) { document.documentElement.style.overflow = "hidden"; document.body.style.overflow = "hidden"; }
+wrap.style.padding = PAD + "px";
+wrap.style.margin = MARGIN + "px";
+if (!SHOW_HEADER) { head.style.display = "none"; verEl.style.display = "none"; }
+document.getElementById("date").textContent =
+  new Date().toLocaleDateString("ja-JP", { timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit" });
+verEl.textContent = "ver " + APP_VERSION;
+if (DEBUG) dbg.style.display = "block";
+
+/* ========= 枠サイズ適用 ========= */
+function applySizing() {
+  const isNumW = /^\d+(\.\d+)?$/.test(WQ);
+  if (SIZING === "box") {
+    frame.style.width = isNumW ? "auto" : "100%";
+    frame.style.maxWidth = isNumW ? (WQ + "px") : "100%";
+    img.style.width = "auto";
+    img.style.height = "auto";
+    img.style.maxWidth = isNumW ? (WQ + "px") : "100%";
+    img.style.maxHeight = HQ + "px";
+    img.style.objectFit = "";
+  } else {
+    frame.style.maxWidth = "100%";
+    frame.style.width = isNumW ? (WQ + "px") : WQ;
+    img.style.width = "100%";
+    img.style.height = HQ + "px";
+    img.style.maxWidth = "";
+    img.style.maxHeight = "";
+    img.style.objectFit = (FIT === "contain") ? "contain" : "cover";
+  }
+  img.style.borderRadius = RADIUS + "px";
+  if (BORDER) img.style.border = BORDER;
+  if (!SHADOW) img.style.boxShadow = "none";
+  if (!LINK_ENABLED) { href.removeAttribute("href"); href.style.pointerEvents = "none"; }
+}
+applySizing();
+
+/* ========= 小道具 ========= */
+function log(s){ if (DEBUG) dbg.textContent += (dbg.textContent ? "\n" : "") + s; }
+function todayParts(tz){
+  const d = new Date(new Date().toLocaleString("en-US",{ timeZone: tz }));
+  return { y: d.getFullYear(), m: String(d.getMonth()+1).padStart(2,"0"), d: String(d.getDate()).padStart(2,"0") };
+}
+function todaySeed(tz){ const p = todayParts(tz); return `${p.y}${p.m}${p.d}`; }
+function langFromMkt(mkt){ const m = String(mkt||"").toLowerCase().split("-")[0]; return (m && /^[a-z]{2}$/.test(m)) ? m : "en"; }
+
+/* 文字列→seed整数→擬似乱数（0..1） */
+function hash32(str){
+  let h = 2166136261 >>> 0;
+  for (let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function rngFromSeed(seedStr){
+  let x = (hash32(seedStr) || 123456789) >>> 0;
+  return function(){
+    x ^= x << 13; x >>>= 0;
+    x ^= x << 17; x >>>= 0;
+    x ^= x << 5;  x >>>= 0;
+    return (x >>> 0) / 4294967296;
+  };
+}
+function pickDeterministic(arr, seedStr){
+  if (!arr || !arr.length) return null;
+  const r = rngFromSeed(seedStr)();
+  const idx = Math.floor(r * arr.length);
+  return arr[Math.min(arr.length-1, Math.max(0, idx))];
+}
+
+/* CORSテキスト取得（AllOrigins → r.jina.ai） */
+async function fetchTextCORS(url){
+  const naked = url.replace(/^https?:\/\//,'');
+  const tries = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://r.jina.ai/https://${naked}`,
+    `https://r.jina.ai/http://${naked}`,
+  ];
+  for (const u of tries) {
+    try {
+      log(`fetch: ${u}`);
+      const r = await fetch(u, { cache: "no-store" });
+      if (r.ok) return r.text();
+    } catch(e){ log("fetch error: " + e.message); }
+  }
+  throw new Error("CORS fetch failed");
+}
+
+/* 画像プロキシ（weserv） */
+function proxyUrl(u, w, h, fit) {
+  const naked = u.replace(/^https?:\/\//, "");
+  const ps = [`url=${encodeURIComponent(naked)}`];
+  if (/^\d+$/.test(String(w))) ps.push(`w=${w}`);
+  if (/^\d+$/.test(String(h))) ps.push(`h=${h}`);
+  if (fit === "cover" || fit === "contain") ps.push(`fit=${fit}`);
+  ps.push("we=1");
+  return `https://images.weserv.nl/?${ps.join("&")}`;
+}
+
+/* 画像ロード（タイムアウト+失敗時プロキシ再試行） */
+function loadImageWithTimeout(src, timeoutMs = 7000) {
+  return new Promise((resolve, reject)=>{
+    let done = false;
+    const i = new Image();
+    const timer = setTimeout(()=>{ if (!done){ done = true; reject(new Error("Image load timeout")); } }, timeoutMs);
+    i.onload = ()=>{ if (!done){ done = true; clearTimeout(timer); resolve(); } };
+    i.onerror = ()=>{ if (!done){ done = true; clearTimeout(timer); reject(new Error("Image load error")); } };
+    i.referrerPolicy = (src.includes("bing.com")) ? "no-referrer" : "";
+    i.src = src;
+  });
+}
+
+/* ========= Anime tags helper (SFW only) ========= */
+const WAIFU_PICS_SFW = ["waifu","neko","shinobu","megumin","cuddle","hug","smile","wink","blush","dance","wave","highfive","handhold","happy","smug"];
+const NEKOS_BEST_TYPES = ["waifu","neko","kitsune","husbando"];
+const WAIFU_IM_SFW = ["waifu","maid","uniform","selfie","bikini","marin-kitagawa","mori-calliope","raiden-shogun"]; // API側SFW判定あり
+function normalizeAnimeTag() {
+  if (ATAG) return ATAG;
+  const lowerQ = Q.toLowerCase();
+  for (const t of [...WAIFU_PICS_SFW, ...NEKOS_BEST_TYPES, ...WAIFU_IM_SFW]) {
+    if (lowerQ.includes(t)) return t;
+  }
+  return "";
+}
+
+/* ========= 既存系ソース ========= */
+async function fetchBing() {
+  log("source: Bing");
+  const api = `https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=${encodeURIComponent(MKT)}`;
+  const text = await fetchTextCORS(api);
+  const json = JSON.parse(text);
+  const it = json.images && json.images[0];
+  if (!it) throw new Error("Bing: no image");
+  const direct = it.url.startsWith("http") ? it.url : "https://www.bing.com" + it.url;
+  const title = it.title || "";
+  const copy = it.copyright || "";
+  return { url: direct, page: "https://www.bing.com", title, credit: copy || "Bing" };
+}
+function buildUnsplashUrl(q, w, h, seed) {
+  const kw = (q || "landscape").split(",").map(s=>s.trim()).filter(Boolean).join(",");
+  const dims = (/^\d+$/.test(String(w)) && /^\d+$/.test(String(h))) ? `/${w}x${h}` : "";
+  return `https://source.unsplash.com/featured${dims}/?${encodeURIComponent(kw)}&sig=${encodeURIComponent(seed)}`;
+}
+async function fetchUnsplash() {
+  log("source: Unsplash");
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const seed = todaySeed(TZ) + (Q ? "_" + Q : "");
+  const direct = buildUnsplashUrl(Q, wnum, HQ, seed);
+  const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct;
+  return { url, page: `https://unsplash.com/s/photos/${encodeURIComponent(Q || "landscape")}`, title: Q ? `テーマ: ${Q}` : "Unsplash featured", credit: "Unsplash", _wnum: wnum, _direct: direct };
+}
+async function fetchWikimedia() {
+  log("source: Wikimedia POTD");
+  const p = todayParts(TZ);
+  const api = `https://en.wikipedia.org/api/rest_v1/feed/featured/${p.y}/${p.m}/${p.d}`;
+  const r = await fetch(api, { cache: "no-store" });
+  if (!r.ok) throw new Error("Wikimedia fetch failed: " + r.status);
+  const data = await r.json();
+  const src = data?.image?.image?.source || data?.image?.thumbnail?.source;
+  if (!src) throw new Error("Wikimedia: no image source");
+  const title = (data?.image?.description?.text || "").replace(/<[^>]*>/g,"").trim() || (data?.image?.title || "Wikimedia Picture of the Day");
+  return { url: src, page: "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day", title, credit: "Wikimedia Commons" };
+}
+async function fetchNasa() {
+  log("source: NASA APOD");
+  const p = todayParts(TZ);
+  const api = `https://api.nasa.gov/planetary/apod?api_key=${encodeURIComponent(NASA_KEY)}&thumbs=true&date=${p.y}-${p.m}-${p.d}`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  const isImg = j.media_type === "image";
+  const src = isImg ? (j.hdurl || j.url) : (j.thumbnail_url || j.url);
+  if (!src) throw new Error("NASA APOD: no image URL");
+  const title = j.title || "NASA Astronomy Picture of the Day";
+  const credit = j.copyright ? `NASA / ${j.copyright}` : "NASA APOD";
+  return { url: src, page: j.hdurl || j.url || "https://apod.nasa.gov/", title, credit };
+}
+async function fetchPicsum() {
+  log("source: Picsum");
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const seed = todaySeed(TZ) + (Q ? "_" + Q : "");
+  const url = `https://picsum.photos/seed/${encodeURIComponent(seed)}/${wnum}/${HQ}`;
+  return { url, page: "https://picsum.photos/", title: Q ? `Picsum – ${Q}` : "Picsum – Random", credit: "Picsum" };
+}
+
+/* ========= Wikipedia & Commons 汎用 ========= */
+async function fetchWikiSummary(title) {
+  log("source: Wikipedia summary");
+  const lang = langFromMkt(MKT);
+  const api = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  const src = j?.thumbnail?.source || j?.originalimage?.source;
+  if (!src) throw new Error("WikiSummary: no image");
+  return {
+    url: src,
+    page: j?.content_urls?.desktop?.page || j?.content_urls?.mobile?.page || `https://${lang}.wikipedia.org/`,
+    title: j?.title || title,
+    credit: `Wikipedia (${lang})`
+  };
+}
+async function fetchWikimediaSearch(query) {
+  log("source: Commons search");
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const api = `https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrlimit=20&prop=imageinfo|info&iiprop=url|extmetadata&iiurlwidth=${wnum}&origin=*`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  const pages = j?.query?.pages ? Object.values(j.query.pages) : [];
+  if (!pages.length) throw new Error("Commons search: no results");
+  const seedStr = todaySeed(TZ) + "|" + query + "|" + MKT;
+  const it = pickDeterministic(pages, seedStr);
+  const ii = it?.imageinfo?.[0];
+  const src = ii?.thumburl || ii?.url;
+  if (!src) throw new Error("Commons search: no image url");
+  const title = it?.title?.replace(/^File:/i,"") || query;
+  return {
+    url: src,
+    page: ii?.descriptionshorturl || ii?.descriptionurl || "https://commons.wikimedia.org/",
+    title: `Commons – ${title}`,
+    credit: "Wikimedia Commons"
+  };
+}
+
+/* ========= Unsplash 固定キーワード ========= */
+function buildUnsplashUrlFromKeywords(keywords, w, h, seed) {
+  const kw = keywords.filter(Boolean).map(s=>s.trim()).join(",");
+  const dims = (/^\d+$/.test(String(w)) && /^\d+$/.test(String(h))) ? `/${w}x${h}` : "";
+  return `https://source.unsplash.com/featured${dims}/?${encodeURIComponent(kw)}&sig=${encodeURIComponent(seed)}`;
+}
+async function fetchUnsplashKeywords(keywords) {
+  log("source: Unsplash (keywords)");
+  const wnum = /^\d+$/.test(String(WQ)) ? Number(WQ) : 1200;
+  const seed = todaySeed(TZ) + "_" + (keywords.join("_") || "random");
+  const direct = buildUnsplashUrlFromKeywords(keywords, wnum, HQ, seed);
+  const url = USE_PROXY ? proxyUrl(direct, wnum, HQ, FIT) : direct;
+  return { url, page: `https://unsplash.com/`, title: `Unsplash – ${keywords.join(", ")}`, credit: "Unsplash", _wnum: wnum, _direct: direct };
+}
+
+/* ========= Anime sources (SFW) ========= */
+async function fetchWaifuPics() {
+  log("source: waifu.pics (SFW)");
+  const tag = normalizeAnimeTag() || "waifu";
+  const api = `https://api.waifu.pics/sfw/${encodeURIComponent(tag)}`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  if (!j || !j.url) throw new Error("waifu.pics: no url");
+  return { url: j.url, page: "https://waifu.pics/", title: `waifu.pics – ${tag}`, credit: "waifu.pics" };
+}
+async function fetchNekosBest() {
+  log("source: nekos.best (SFW)");
+  const tag = normalizeAnimeTag();
+  const type = NEKOS_BEST_TYPES.includes(tag) ? tag : "waifu";
+  const api = `https://nekos.best/api/v2/${encodeURIComponent(type)}`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  const it = j?.results?.[0];
+  if (!it?.url) throw new Error("nekos.best: no url");
+  const creditParts = [];
+  if (it.artist_name) creditParts.push(it.artist_name);
+  if (it.source_url) creditParts.push("source");
+  return {
+    url: it.url,
+    page: it.source_url || "https://nekos.best/",
+    title: `nekos.best – ${type}`,
+    credit: creditParts.length ? `nekos.best / ${creditParts.join(" · ")}` : "nekos.best"
+  };
+}
+async function fetchWaifuIm() {
+  log("source: waifu.im (SFW)");
+  const tag = normalizeAnimeTag();
+  const params = new URLSearchParams();
+  params.set("is_nsfw","false");
+  if (tag) params.set("included_tags", tag);
+  const api = `https://api.waifu.im/search/?${params.toString()}`;
+  const text = await fetchTextCORS(api);
+  const j = JSON.parse(text);
+  const it = j?.images?.[0];
+  if (!it?.url) throw new Error("waifu.im: no url");
+  const title = it.tags?.length ? `waifu.im – ${it.tags.map(t=>t.name).join(", ")}` : "waifu.im";
+  const credit = it.artist ? `waifu.im / ${it.artist}` : "waifu.im";
+  return { url: it.url, page: it.source || "https://waifu.im/", title, credit };
+}
+async function fetchAnime() {
+  log("source: anime (composed)");
+  const providers = [fetchWaifuIm, fetchWaifuPics, fetchNekosBest];
+  for (const fn of providers) { try { return await fn(); } catch(e){ log("anime subsource failed: " + e.message); } }
+  throw new Error("Anime: all providers failed");
+}
+
+/* ========= 取得ルーティング ========= */
+async function resolveImage() {
+  const order = [];
+  if (SOURCE === "auto") {
+    const qHasAnime = /\b(anime|waifu|neko|maid|uniform|marin|raiden)\b/i.test(Q) || ATAG;
+    if (qHasAnime) order.push(fetchAnime);
+
+    if (CAT === "landscape") {
+      order.push(
+        () => fetchUnsplashKeywords(Q ? [Q,"landscape","scenery","nature"] : ["landscape","nature","mountains","sea"]),
+        fetchBing,
+        () => fetchWikimediaSearch(Q || "landscape"),
+        fetchPicsum,
+        fetchWikimedia
+      );
+    } else if (CAT === "space") {
+      order.push(
+        fetchNasa,
+        () => fetchUnsplashKeywords(Q ? [Q,"space","galaxy","nebula"] : ["space","galaxy","nebula","stars"]),
+        () => fetchWikimediaSearch(Q || "astronomy"),
+        fetchBing,
+        fetchWikimedia
+      );
+    } else if (CAT === "science" || CAT === "digital" || CAT === "science, digital") {
+      order.push(
+        () => fetchUnsplashKeywords(Q ? [Q,"digital","science","data","abstract"] : ["digital","science","data","abstract","futuristic"]),
+        () => fetchWikimediaSearch(Q || "data visualization"),
+        fetchBing,
+        fetchWikimedia
+      );
+    } else if (CAT === "sports") {
+      if (Q) order.push(() => fetchWikiSummary(Q));
+      order.push(
+        () => fetchUnsplashKeywords(Q ? [Q,"athlete","sports"] : ["athlete","sports","stadium","match"]),
+        fetchBing,
+        () => fetchWikimediaSearch(Q || "sports")
+      );
+    } else {
+      order.push(Q ? fetchUnsplash : fetchBing, fetchWikimedia, Q ? fetchBing : fetchUnsplash, fetchPicsum, fetchNasa, fetchAnime);
+    }
+  } else {
+    // 明示指定：フォールバックしない
+    if (SOURCE === "wikimedia") {
+      order.push(Q ? (() => fetchWikimediaSearch(Q)) : fetchWikimedia);  // qがあれば検索、なければPOTD
+    } else if (SOURCE === "commons") {
+      order.push(() => fetchWikimediaSearch(Q || "landscape")); // 常に検索
+    } else {
+      const map = {
+        bing: fetchBing, unsplash: fetchUnsplash, nasa: fetchNasa, picsum: fetchPicsum,
+        anime: fetchAnime, waifu: fetchWaifuPics, neko: fetchNekosBest, waifuim: fetchWaifuIm
+      };
+      if (!map[SOURCE]) throw new Error("Unknown source: " + SOURCE);
+      order.push(map[SOURCE]);
+    }
+  }
+
+  for (const fn of order) {
+    try {
+      const r = await fn();
+      let finalUrl = r.url;
+      const wnum = r._wnum;
+      try {
+        await loadImageWithTimeout(finalUrl);
+      } catch {
+        log("direct failed: " + (new URL(finalUrl).hostname));
+        if (USE_PROXY) {
+          finalUrl = proxyUrl(r._direct || finalUrl, wnum || (/^\d+$/.test(String(WQ)) ? Number(WQ) : 1200), HQ, FIT);
+          await loadImageWithTimeout(finalUrl);
+        } else { throw new Error("load failed"); }
+      }
+      return { ...r, url: finalUrl };
+    } catch (e) { log("source failed: " + e.message); }
+  }
+  throw new Error("All sources failed");
+}
+
+/* ========= キャッシュ ========= */
+function cacheKey(kind){
+  const base = [
+    "todayshot",
+    SOURCE, CAT, Q, ATAG, MKT, TZ, WQ, HQ, FIT, APP_VERSION
+  ].join("|");
+  if (kind === "day") return base + "|ymd=" + todaySeed(TZ);
+  if (kind === "session") return base + "|sess=1";
+  return base + "|none";
+}
+function getCached(kind){
+  try {
+    if (kind === "none") return null;
+    const store = (kind === "session") ? sessionStorage : localStorage;
+    const raw = store.getItem(cacheKey(kind));
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function setCached(kind, payload){
+  try {
+    if (kind === "none") return;
+    const store = (kind === "session") ? sessionStorage : localStorage;
+    store.setItem(cacheKey(kind), JSON.stringify(payload));
+  } catch {}
+}
+
+/* ========= 表示 ========= */
+(async () => {
+  try {
+    const cached = getCached(PERSIST);
+    if (cached) {
+      log("use cache");
+      img.onload = () => img.classList.remove("ph");
+      img.referrerPolicy = (cached.url.includes("bing.com")) ? "no-referrer" : "";
+      img.src = cached.url;
+      href.href = LINK_ENABLED ? (cached.page || cached.url) : "javascript:void(0)";
+      if (CAPTION) { cap.style.display = ""; cap.textContent = cached.title ? `${cached.title} — ${cached.credit}` : cached.credit; }
+      else { cap.style.display = "none"; }
+      return;
+    }
+
+    const { url, page, title, credit } = await resolveImage();
+    setCached(PERSIST, { url, page, title, credit });
+
+    img.onload = () => img.classList.remove("ph");
+    img.referrerPolicy = (url.includes("bing.com")) ? "no-referrer" : "";
+    img.src = url;
+    href.href = LINK_ENABLED ? (page || url) : "javascript:void(0)";
+    if (CAPTION) { cap.style.display = ""; cap.textContent = title ? `${title} — ${credit}` : credit; }
+    else { cap.style.display = "none"; }
+  } catch (e) {
+    log("fatal: " + e.message);
+    cap.style.display = "";
+    cap.textContent = "画像を取得できませんでした。";
+  }
+})();
+</script>
