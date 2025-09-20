@@ -20,7 +20,7 @@
   .panel{border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card)}
   .head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
   .head .spacer{flex:1}
-  .head h3{margin:0;font-size:16px;font-weight:700}
+  .head h3{margin:0;font-size:18px;font-weight:700}
   .meta{font-size:12px;color:var(--muted)}
   .ctrls{display:flex;gap:6px}
   .btn{
@@ -99,12 +99,12 @@
   else if (activeCount === 2) layout.classList.add("cols-2");
 
   // カラム+30px幅増し（以前の仕様）
-  const baseWidth = 1250;
+  const baseWidth = 1320;
   shell.style.maxWidth = `calc(${baseWidth}px + ${activeCount*30}px)`;
 
   const qiitaDOM  = wantQiita  ? makePanel("Qiita", "--qiita")          : null;
   const zennDOM   = wantZenn   ? makePanel("Zenn",  "--zenn")           : null;
-  const hatenaDOM = wantHatena ? makePanel("はてな", "--hatena", true)  : null;
+  const hatenaDOM = wantHatena ? makePanel("はてなブックマーク", "--hatena", true)  : null;
   if (qiitaDOM)  layout.appendChild(qiitaDOM.wrap);
   if (zennDOM)   layout.appendChild(zennDOM.wrap);
   if (hatenaDOM) layout.appendChild(hatenaDOM.wrap);
