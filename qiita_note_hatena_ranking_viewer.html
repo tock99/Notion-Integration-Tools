@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Qiita / note / はてなブックマーク トレンド</title>
+<style>
+  :root{
+    --qiita:#55C500; --note:#41C9B4; --hatena:#008FDE;
+    --ink:#111; --muted:#666; --bg:#fff; --chip:#f4f8ef; --border:#e6f3d8; --card:#fff; --err:#b00020;
+  }
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Sans","Noto Sans JP",sans-serif}
+  .shell{max-width:1200px;margin:0 auto;padding:12px}
+  .grid{display:grid;gap:12px}
+  @media (min-width: 880px){ .grid.cols-2{grid-template-columns:1fr 1fr} }
+  @media (min-width: 1080px){ .grid.cols-3{grid-template-columns:1fr 1fr 1fr} }
+
+  .panel{border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card)}
+  .head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
+  .head h3{margin:0;font-size:16px;font-weight:700}
+  .meta{font-size:12px;color:var(--muted)}
+
+  ol.list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px}
+  .item a{
+    display:flex;gap:10px;text-decoration:none;color:inherit;
+    border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fff
+  }
+  .rank{width:24px;min-width:24px;height:24px;display:grid;place-items:center;border-radius:6px;background:var(--chip);font-weight:700;font-size:12px}
+
+  /* タイトル：常に2行、省略 */
+  .title{
+    font-weight:600;font-size:14px;line-height:1.4;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow:hidden;max-height:calc(1.4em * 2);
+  }
+  /* バッジは小さめ（縦の揃え用） */
+  .badges{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted)}
+  .chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:999px;background:var(--chip);border:1px solid var(--border)}
+  .chip svg{width:12px;height:12px}
+
+  .status{margin-top:6px;font-size:12px;color:var(--muted)}
+  .error{color:var(--err)}
+  .debug{margin-top:8px;font-size:11px;color:#888;white-space:pre-wrap}
+</style>
+
+<div class="shell">
+  <div id="layout" class="grid"></div>
+</div>
+
+<script>
+(async () => {
+  /* ===== 0) Query & const ===== */
+  const q = new URLSearchParams(location.search);
+  const SOURCE = (q.get("source") || "all").toLowerCase(); // all|qiita|note|hatena
+  const MAX = Math.max(1, Math.min(20, Number(q.get("max") || 5)));
+  const PROXY_BASE = q.get("proxy_base") || ""; // 例: https://your-worker.workers.dev
+  const DEBUG = (q.get("debug") || "0") === "1";
+
+  const NOTE_SOURCE = (q.get("note_source") || "json").toLowerCase(); // json|html
+  const HATENA_MODE = (q.get("hatena_mode") || "auto").toLowerCase(); // auto|proxy|direct
+
+  // Qiita
+  const QIITA_FEED = "https://qiita.com/popular-items/feed.atom";
+  const QIITA_ITEM_API = id => `https://qiita.com/api/v2/items/${encodeURIComponent(id)}`;
+
+  // はてブ（直URL2種）
+  const HATENA_RSS_1 = "https://b.hatena.ne.jp/hotentry.rss";
+  const HATENA_RSS_2 = "https://b.hatena.ne.jp/hotentry?mode=rss";
+
+  // note Worker endpoints
+  const NOTE_TODAY_JSON = (max) => `${PROXY_BASE}/note/today.json?max=${encodeURIComponent(max)}`;
+  const NOTE_TODAY_HTML = (max) => `${PROXY_BASE}/note/today.html?max=${encodeURIComponent(max)}`;
+
+  // note 直接スクレイプ用
+  const NOTE_TODAY_URL = "https://note.com/today";
+  const NOTE_DETAIL_API = key => `https://note.com/api/v3/notes/${encodeURIComponent(key)}`;
+
+  /* ===== 1) Layout ===== */
+  const layout = document.getElementById("layout");
+  const wantQiita  = SOURCE === "all" || SOURCE === "qiita";
+  const wantNote   = SOURCE === "all" || SOURCE === "note";
+  const wantHatena = SOURCE === "all" || SOURCE === "hatena";
+
+  const activeCount = [wantQiita, wantNote, wantHatena].filter(Boolean).length;
+  if (activeCount === 3) layout.classList.add("cols-3");
+  else if (activeCount === 2) layout.classList.add("cols-2");
+
+  const qiitaDOM  = wantQiita  ? makePanel("Qiita トレンド", "--qiita")          : null;
+  const noteDOM   = wantNote   ? makePanel("note 今日の注目", "--note")          : null;
+  const hatenaDOM = wantHatena ? makePanel("はてなブックマーク 注目", "--hatena") : null;
+  if (qiitaDOM)  layout.appendChild(qiitaDOM.wrap);
+  if (noteDOM)   layout.appendChild(noteDOM.wrap);
+  if (hatenaDOM) layout.appendChild(hatenaDOM.wrap);
+
+  /* ===== 2) Run ===== */
+  if (qiitaDOM)  runQiita(qiitaDOM).catch(()=>{});
+  if (noteDOM)   runNoteToday(noteDOM).catch(()=>{});
+  if (hatenaDOM) runHatena(hatenaDOM).catch(()=>{});
+
+  /* ===== helpers: UI/NET ===== */
+  function makePanel(title, brandVar){
+    const wrap = document.createElement("div");
+    wrap.className = "col";
+    wrap.innerHTML = `
+      <div class="panel">
+        <div class="head">
+          <h3 style="color:${css(brandVar)}">${title}</h3>
+          <div class="meta">更新情報を取得中…</div>
+        </div>
+        <ol class="list"></ol>
+        <div class="status">読み込み中…</div>
+        <div class="debug" style="display:${DEBUG?'block':'none'}"></div>
+      </div>
+    `;
+    return {
+      wrap,
+      meta: wrap.querySelector(".meta"),
+      list: wrap.querySelector(".list"),
+      status: wrap.querySelector(".status"),
+      debug: wrap.querySelector(".debug"),
+      brand: css(brandVar)
+    };
+  }
+  function css(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function heart(){ return `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 21s-7.2-4.35-9.6-8.7C.6 8.9 2.2 5 6 5c2.1 0 3.4 1.2 4 2 0.6-0.8 1.9-2 4-2 3.8 0 5.4 3.9 3.6 7.3C19.2 16.65 12 21 12 21z"/></svg>`; }
+  function tagIcon(){ return `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M10.59 2L3 9.59V21h11.41L22 13.41V2H10.59zM7 12a2 2 0 110-4 2 2 0 010 4z"/></svg>`; }
+  function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function addRow(listEl, rank, href, title, likeText, tagText, brandColor){
+    const li = document.createElement("li");
+    li.className = "item";
+    li.innerHTML = `
+      <a href="${href}" target="_blank" rel="noopener">
+        <div class="rank" style="color:${brandColor}">${rank}</div>
+        <div class="col">
+          <div class="title">${escapeHtml(title)}</div>
+          <div class="badges">
+            <span class="chip">${heart()} <span>${likeText}</span></span>
+            <span class="chip">${tagIcon()} <span>${tagText}</span></span>
+          </div>
+        </div>
+      </a>`;
+    listEl.appendChild(li);
+    return li;
+  }
+  function updateRow(li, likeText, tagText){
+    const chips = li.querySelectorAll(".chip span:last-child");
+    if (chips[0]) chips[0].textContent = likeText;
+    if (chips[1]) chips[1].textContent = tagText;
+  }
+  async function proxyFetch(target, { accept } = {}){
+    if (!PROXY_BASE) throw new Error("proxy_base not configured");
+    const u = `${PROXY_BASE}/?url=${encodeURIComponent(target)}`;
+    const r = await fetch(u, { headers: accept ? { "Accept": accept } : {} });
+    if (!r.ok) throw new Error(`proxy http ${r.status}`);
+    return r;
+  }
+
+  /* ===== Qiita ===== */
+  function parseQiitaAtom(xmlText){
+    const doc = new DOMParser().parseFromString(xmlText,"application/xml");
+    const feedUpdated = doc.querySelector("feed > updated")?.textContent || "";
+    const entries = [...doc.querySelectorAll("entry")].map(e=>{
+      const title = e.querySelector("title")?.textContent?.trim() || "(no title)";
+      const link = e.querySelector('link[rel="alternate"]')?.getAttribute("href") || e.querySelector("link")?.getAttribute("href") || "";
+      const m = link.match(/\/items\/([0-9a-f]{20,})/i);
+      const itemId = m ? m[1] : null;
+      return { title, link, itemId };
+    });
+    return { feedUpdated, entries };
+  }
+  async function runQiita(dom){
+    const dbg = [];
+    try{
+      const feed = await proxyFetch(QIITA_FEED, { accept:"application/atom+xml" });
+      dbg.push(`qiita feed status=${feed.status}`);
+      const xml = await feed.text();
+      const {feedUpdated, entries} = parseQiitaAtom(xml);
+      dom.meta.textContent = feedUpdated
+        ? "RSS更新: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date(feedUpdated))
+        : "RSS更新: 取得不可";
+
+      dom.list.innerHTML=""; dom.status.textContent="記事詳細を取得中…";
+      let rank=1;
+      for (const ent of entries.slice(0,MAX)){
+        const li = addRow(dom.list, rank, ent.link, ent.title, "いいね: 取得中", "タグ: 取得中", dom.brand);
+        if (ent.itemId){
+          try{
+            const r = await proxyFetch(QIITA_ITEM_API(ent.itemId), { accept: "application/json" });
+            dbg.push(`qiita item ${ent.itemId} status=${r.status}`);
+            const j = await r.json();
+            const likes = (typeof j.likes_count==="number")? j.likes_count : "—";
+            const tags  = Array.isArray(j.tags)? j.tags.map(t=>t.name) : [];
+            const shown = tags.slice(0,2).join(", "); const rest = tags.length>2? ` 他:${tags.length-2}`:"";
+            updateRow(li, `いいね: ${likes}`, tags.length?`タグ: ${shown}${rest}`:"タグ: —");
+          }catch(e){ updateRow(li,"いいね: —","タグ: —"); dbg.push(`qiita item error: ${String(e).slice(0,120)}`); }
+        }
+        rank++;
+      }
+      dom.status.textContent = "";
+    }catch(e){
+      dom.status.classList.add("error");
+      dom.status.textContent = "取得に失敗しました。";
+      dbg.push(`qiita error: ${String(e).slice(0,200)}`);
+    }
+    if (DEBUG) dom.debug.textContent = dbg.join("\n");
+  }
+
+  /* ===== note 今日の注目（Worker + 自動フォールバック） ===== */
+
+  // Worker JSON/HTML → items 取得（失敗/空のときは null を返す）
+  async function noteFromWorkerJSON(max, dbg){
+    try{
+      const r = await fetch(NOTE_TODAY_JSON(max), { headers: { "Accept": "application/json" } });
+      dbg.push(`note today.json status=${r.status}`);
+      if (!r.ok) return null;
+      const j = await r.json().catch(()=>null);
+      if (!j || !Array.isArray(j.items) || j.items.length===0) return null;
+      return j.items.map(x=>({
+        url: x.url, title: x.title, likes: Number(x.likes)||0, tags: Array.isArray(x.tags)?x.tags:[]
+      }));
+    }catch(e){ dbg.push(`note json err: ${String(e)}`); return null; }
+  }
+  async function noteFromWorkerHTML(max, dbg){
+    try{
+      const r = await fetch(NOTE_TODAY_HTML(max), { headers: { "Accept": "text/html" } });
+      dbg.push(`note today.html status=${r.status}`);
+      if (!r.ok) return null;
+      const html = await r.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const lis = [...doc.querySelectorAll("ol > li")];
+      dbg.push(`note today.html li=${lis.length}`);
+      if (lis.length===0) return null;
+      return lis.slice(0,max).map(li=>{
+        const a = li.querySelector("a");
+        const strong = a?.querySelector("strong");
+        const small = a?.querySelector("small");
+        const href = a?.getAttribute("href") || "#";
+        const title = (strong?.textContent || a?.textContent || "").trim() || "(no title)";
+        const metaTxt = (small?.textContent || "").trim();
+        const likeMatch = metaTxt.match(/スキ:\s*([0-9]+)/);
+        const likes = likeMatch ? Number(likeMatch[1]) : 0;
+        let tags = [];
+        const tagMatch = metaTxt.match(/タグ:\s*(.+)$/);
+        if (tagMatch) {
+          const raw = tagMatch[1].trim();
+          if (raw !== "—") tags = raw.split(",").map(s=>s.trim()).filter(Boolean);
+        }
+        return { url: href, title, likes, tags };
+      });
+    }catch(e){ dbg.push(`note html err: ${String(e)}`); return null; }
+  }
+
+  // 直接スクレイプ（/today を proxy 経由で取得 → key 抽出 → notes API 詳細）
+  function extractPairsFromHtml(html, limit=60){
+    const out=[], seen=new Set(); let m;
+    const reHref=/href="\/([^"\/@]+)\/n\/([a-z0-9]{8,})"/ig;
+    while((m=reHref.exec(html))!==null){ const urlname=m[1], key=m[2]; if(!seen.has(key)){seen.add(key); out.push({urlname,key}); if(out.length>=limit) break;} }
+    if(out.length<5){ // バックアップ
+      const reKey=/"key"\s*:\s*"([a-z0-9]+)"/ig;
+      while((m=reKey.exec(html))!==null){ const key=m[1]; if(!seen.has(key)){seen.add(key); out.push({urlname:"",key}); if(out.length>=limit) break;} }
+    }
+    return out;
+  }
+  async function noteDetailByKey(key, dbg){
+    try{
+      const r = await proxyFetch(NOTE_DETAIL_API(key), { accept:"application/json" });
+      dbg && dbg.push(`detail ${key} status=${r.status}`);
+      const j = await r.json().catch(()=>null);
+      const d = j?.data || {};
+      const urlname = d?.user?.urlname || d?.user?.urlName || d?.creator?.urlname || d?.creator?.urlName || "";
+      return {
+        url: urlname ? `https://note.com/${urlname}/n/${key}` : `https://note.com/n/${key}`,
+        title: (d?.name || "").trim() || "(no title)",
+        likes: Number(d?.likedCount ?? d?.likeCount ?? 0) || 0,
+        tags: Array.isArray(d?.hashtags)? d.hashtags.map(h=>h.name).filter(Boolean) : []
+      };
+    }catch(e){ dbg && dbg.push(`detail ${key} err: ${String(e)}`); return null; }
+  }
+  async function noteFromClientScrape(max, dbg){
+    try{
+      const r = await proxyFetch(NOTE_TODAY_URL, { accept:"text/html" });
+      dbg.push(`today html status=${r.status}`);
+      const html = await r.text();
+      const pairs = extractPairsFromHtml(html, Math.max(50, max*6));
+      dbg.push(`today pairs=${pairs.length}`);
+      const items = [];
+      for (const {key} of pairs){
+        const d = await noteDetailByKey(key, dbg);
+        if (d) items.push(d);
+        if (items.length >= max) break;
+      }
+      return items.length?items:null;
+    }catch(e){ dbg.push(`today scrape err: ${String(e)}`); return null; }
+  }
+
+  async function runNoteToday(dom){
+    const dbg = [];
+    try{
+      if (!PROXY_BASE){
+        dom.status.classList.add("error");
+        dom.status.textContent = "proxy_base 未設定";
+        if (DEBUG) dom.debug.textContent = "note today needs proxy_base";
+        return;
+      }
+      dom.meta.textContent = "取得: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date());
+      dom.list.innerHTML=""; dom.status.textContent="記事を収集中…";
+
+      // 1) Worker 優先（json/html 指定）
+      let items = NOTE_SOURCE==="json"
+        ? await noteFromWorkerJSON(MAX, dbg)
+        : await noteFromWorkerHTML(MAX, dbg);
+
+      // 2) もう片方でも試す
+      if (!items) {
+        items = NOTE_SOURCE==="json"
+          ? await noteFromWorkerHTML(MAX, dbg)
+          : await noteFromWorkerJSON(MAX, dbg);
+      }
+      // 3) クライアント側スクレイプ フォールバック
+      if (!items) items = await noteFromClientScrape(MAX, dbg);
+
+      // 4) 表示
+      let rank=1;
+      for (const it of (items||[]).slice(0,MAX)){
+        const tags = it.tags || [];
+        const tShown = tags.slice(0,2).join(", ");
+        const tRest  = tags.length>2 ? ` 他:${tags.length-2}` : "";
+        addRow(dom.list, rank, it.url, it.title,
+               `スキ: ${Number.isFinite(it.likes)?it.likes:0}`,
+               tags.length?`タグ: ${tShown}${tRest}`:"タグ: —",
+               dom.brand);
+        rank++;
+      }
+      dom.status.textContent = dom.list.children.length ? "" : "記事が見つかりませんでした。";
+    }catch(e){
+      dom.status.classList.add("error");
+      dom.status.textContent = "取得に失敗しました。";
+      dbg.push(`note today fatal: ${String(e).slice(0,200)}`);
+    }
+    if (DEBUG) dom.debug.textContent = dbg.join("\n");
+  }
+
+  /* ===== はてなブックマーク ===== */
+  function parseHatenaRSS(xml){
+    const doc = new DOMParser().parseFromString(xml,"application/xml");
+    const NS_HATENA = "http://www.hatena.ne.jp/info/xmlns#";
+    const NS_DC     = "http://purl.org/dc/elements/1.1/";
+    const lastBuild =
+      doc.querySelector("channel > lastBuildDate")?.textContent ||
+      doc.querySelector("channel > pubDate")?.textContent || "";
+    const items = [...doc.getElementsByTagName("item")].map(n=>{
+      const title = n.getElementsByTagName("title")[0]?.textContent?.trim() || "(no title)";
+      const link  = n.getElementsByTagName("link")[0]?.textContent?.trim()  || "";
+      let bc = NaN;
+      const bcSel = n.querySelector('hatena\\:bookmarkcount');
+      if (bcSel) bc = Number(bcSel.textContent);
+      if (!Number.isFinite(bc)) {
+        const bcNs = n.getElementsByTagNameNS(NS_HATENA, "bookmarkcount")[0];
+        if (bcNs) bc = Number(bcNs.textContent);
+      }
+      if (!Number.isFinite(bc)) bc = 0;
+      const tags = [];
+      const cats = n.getElementsByTagName("category");
+      for (let i=0;i<cats.length;i++){ const t = cats[i].textContent.trim(); if (t) tags.push(t); }
+      const dcSubs = n.getElementsByTagNameNS(NS_DC, "subject");
+      for (let i=0;i<dcSubs.length;i++){ const t = dcSubs[i].textContent.trim(); if (t) tags.push(t); }
+      return { title, link, bookmarks: bc, tags };
+    });
+    return { lastBuild, items };
+  }
+
+  async function runHatena(dom){
+    const dbg = [];
+    try{
+      dom.list.innerHTML="";
+      let xml = null;
+
+      // 1) 直取り（auto/direct のとき試す）
+      if (HATENA_MODE === "auto" || HATENA_MODE === "direct") {
+        try {
+          const r1 = await fetch(HATENA_RSS_1, { headers: { Accept: "application/xml" } });
+          if (!r1.ok) throw new Error("direct #1 " + r1.status);
+          xml = await r1.text(); dbg.push("hatena direct #1 ok");
+        } catch(e1){
+          try {
+            const r2 = await fetch(HATENA_RSS_2, { headers: { Accept: "application/xml" } });
+            if (!r2.ok) throw new Error("direct #2 " + r2.status);
+            xml = await r2.text(); dbg.push("hatena direct #2 ok");
+          } catch(e2){
+            dbg.push("hatena direct failed: " + e2);
+            if (HATENA_MODE === "direct") throw e2;
+          }
+        }
+      }
+
+      // 2) プロキシ（auto/proxy のとき or 直が失敗）
+      if (!xml && (HATENA_MODE === "auto" || HATENA_MODE === "proxy")) {
+        if (!PROXY_BASE) throw new Error("proxy_base not configured for hatena");
+        let p = await proxyFetch(HATENA_RSS_1, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
+        dbg.push(`hatena proxy #1 status=${p.status}`);
+        if (!p.ok) {
+          p = await proxyFetch(HATENA_RSS_2, { accept: "application/rss+xml,application/xml;q=0.9,*/*;q=0.7" });
+          dbg.push(`hatena proxy #2 status=${p.status}`);
+          if (!p.ok) throw new Error(`hatena proxy failed (${p.status})`);
+        }
+        xml = await p.text();
+      }
+
+      const { lastBuild, items } = parseHatenaRSS(xml);
+      dom.meta.textContent = lastBuild
+        ? "RSS更新: " + new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date(lastBuild))
+        : "RSS更新: 取得不可";
+
+      dom.status.textContent="記事を整形中…";
+
+      const top = items.sort((a,b)=> (b.bookmarks||0) - (a.bookmarks||0)).slice(0,MAX);
+
+      let rank=1;
+      for (const it of top){
+        const tags = it.tags || [];
+        const tShown = tags.slice(0,2).join(", ");
+        const tRest  = tags.length>2 ? ` 他:${tags.length-2}` : "";
+        addRow(dom.list, rank, it.link, it.title,
+               `ブクマ: ${Number.isFinite(it.bookmarks)?it.bookmarks:0}`,
+               tags.length?`タグ: ${tShown}${tRest}`:"タグ: —",
+               dom.brand);
+        rank++;
+      }
+      dom.status.textContent = top.length ? "" : "記事が見つかりませんでした。";
+    }catch(e){
+      dom.status.classList.add("error");
+      dom.status.textContent = "取得に失敗しました。";
+      dbg.push(`hatena error: ${String(e).slice(0,200)}`);
+    }
+    if (DEBUG) dom.debug.textContent = dbg.join("\n");
+  }
+})();
+</script>
